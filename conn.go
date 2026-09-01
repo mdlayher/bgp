@@ -54,10 +54,22 @@ func NewConn(c net.Conn) *Conn {
 	}
 }
 
-// observe reports one framed message to the tap, if any. Raw is lent for
-// the duration of the call: on the read side it is the buffered reader's
-// memory, on the write side the reused write buffer.
-func (c *Conn) observe(dir Direction, raw []byte, m Message, err error) {
+// setTap installs the message tap. It takes both locks so a concurrent
+// reader or writer sees the tap on its next message, never a torn store.
+func (c *Conn) setTap(tap func(MessageEvent)) {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	c.tap = tap
+}
+
+// observeLocked reports one framed message to the tap, if any. The caller
+// must hold rmu or wmu: setTap takes both, so a locked read of c.tap is
+// never torn. Raw is lent for the duration of the call: on the read side it
+// is the buffered reader's memory, on the write side the reused write
+// buffer.
+func (c *Conn) observeLocked(dir Direction, raw []byte, m Message, err error) {
 	if c.tap == nil {
 		return
 	}
@@ -111,7 +123,7 @@ func (c *Conn) ReadMessage() (Message, error) {
 		err := headerError(SubcodeBadMessageLength, h[markerLen:markerLen+2],
 			"message length %d is not between %d and %d bytes",
 			length, headerLen, MaxMessageSize)
-		c.observe(DirectionReceived, h, nil, err)
+		c.observeLocked(DirectionReceived, h, nil, err)
 		return nil, err
 	}
 
@@ -127,7 +139,7 @@ func (c *Conn) ReadMessage() (Message, error) {
 	// ParseMessage validates the marker and length again. The duplicated work
 	// is cheap, and keeps ParseMessage the package's only parser.
 	m, err := ParseMessage(b)
-	c.observe(DirectionReceived, b, m, err)
+	c.observeLocked(DirectionReceived, b, m, err)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +169,7 @@ func (c *Conn) WriteMessage(m Message) error {
 	c.wb = b
 
 	_, err = c.c.Write(b)
-	c.observe(DirectionSent, b, m, err)
+	c.observeLocked(DirectionSent, b, m, err)
 	return err
 }
 
@@ -190,3 +202,13 @@ type marshalError struct{ err error }
 
 func (e *marshalError) Error() string { return e.err.Error() }
 func (e *marshalError) Unwrap() error { return e.err }
+
+// isMarshalError reports whether err is a caller's marshal failure rather
+// than a connection write failure: a failed marshal belongs to the caller
+// and leaves the session healthy, while a failed write is terminal.
+// Classification is by origin, via marshalError, so a custom transport's
+// write errors are terminal whether or not they implement net.Error.
+func isMarshalError(err error) bool {
+	_, ok := errors.AsType[*marshalError](err)
+	return ok
+}

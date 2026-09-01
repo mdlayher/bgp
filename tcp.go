@@ -414,6 +414,11 @@ func (l *Listener) RemoveMD5(peer netip.Addr) error {
 	return setMD5(l.rc, peer, "")
 }
 
+// serves reports whether the Listener is bound to peer's address family:
+// IPv4 and IPv6 alike, a peer's key belongs on exactly the listeners its
+// SYN could reach.
+func (l *Listener) serves(peer netip.Addr) bool { return l.v4 == peer.Is4() }
+
 // Addr returns the Listener's network address.
 func (l *Listener) Addr() net.Addr { return l.l.Addr() }
 

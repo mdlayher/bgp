@@ -470,3 +470,16 @@ func appendCapability(b []byte, c Capability) ([]byte, error) {
 	b = append(b, byte(c.Code), byte(len(c.Data)))
 	return append(b, c.Data...), nil
 }
+
+// mustAppendCapability appends the wire encoding of a locally generated,
+// fixed-size capability, whose data always fits: an error is an invariant
+// violation in this package, not an input. Caller-supplied capabilities go
+// through appendCapability, whose error reaches the caller.
+func mustAppendCapability(b []byte, c Capability) []byte {
+	b, err := appendCapability(b, c)
+	if err != nil {
+		panic(err)
+	}
+
+	return b
+}

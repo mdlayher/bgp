@@ -1,6 +1,9 @@
 package bgp
 
-import "net"
+import (
+	"net"
+	"slices"
+)
 
 // A Direction is the direction a message traveled on a connection, as seen
 // by this speaker.
@@ -58,4 +61,30 @@ type MessageEvent struct {
 	// distinguish a collision's two connections. Their concrete types are
 	// the transport's; a TCP connection reports *net.TCPAddr.
 	LocalAddr, RemoteAddr net.Addr
+}
+
+// clone returns a fully owned copy of the event: Raw is copied and Message
+// deep-copied, so a Peer's tap may retain what the FSM only lends.
+func (e MessageEvent) clone() MessageEvent {
+	e.Raw = slices.Clone(e.Raw)
+	e.Message = cloneMessage(e.Message)
+	return e
+}
+
+// cloneMessage deep-copies a Message of any type, or returns nil for nil.
+func cloneMessage(m Message) Message {
+	switch m := m.(type) {
+	case *Open:
+		return m.Clone()
+	case *Update:
+		return m.Clone()
+	case *Notification:
+		return m.Clone()
+	case *Keepalive:
+		return &Keepalive{}
+	case *RouteRefresh:
+		return m.Clone()
+	default:
+		return nil
+	}
 }

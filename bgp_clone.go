@@ -125,3 +125,23 @@ func (src *RouteRefresh) Clone() *RouteRefresh {
 var _RouteRefreshCloneNeedsRegeneration = RouteRefresh(struct {
 	Family Family
 }{})
+
+// Clone makes a deep copy of GracefulRestartConfig.
+// The result aliases no memory with the original.
+func (src *GracefulRestartConfig) Clone() *GracefulRestartConfig {
+	if src == nil {
+		return nil
+	}
+	dst := new(GracefulRestartConfig)
+	*dst = *src
+	dst.Families = append(src.Families[:0:0], src.Families...)
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _GracefulRestartConfigCloneNeedsRegeneration = GracefulRestartConfig(struct {
+	RestartTime         time.Duration
+	NotificationSupport bool
+	Families            []GracefulRestartFamily
+	Restarting          func() bool
+}{})
