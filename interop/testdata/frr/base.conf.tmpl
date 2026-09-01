@@ -1,0 +1,64 @@
+! Rendered by the interop harness from an frrConfig; see frr.go.
+!
+! Deliberate stances baked in rather than rediscovered per scenario:
+! - Explicit permit route-maps satisfy FRR's RFC 8212 eBGP default-deny
+!   the way production deployments do; the suite never uses
+!   "no bgp ebgp-requires-policy".
+! - "no bgp network import-check" announces network statements without
+!   kernel routes (the oracle installs none).
+! - "timers bgp 3 9" makes failures surface in seconds; the negotiated
+!   hold time asserted by tests is therefore 9 seconds.
+! - "timers connect 5" keeps FRR's active open prompt when it dials a
+!   passive library speaker (the default retry is 120 seconds).
+frr defaults traditional
+hostname frr-interop
+log stdout
+!
+router bgp {{.ASN}}
+ bgp router-id {{.RouterID}}
+ no bgp network import-check
+ timers bgp 3 9
+{{- if .GracefulRestart}}
+ bgp graceful-restart
+{{- end}}
+{{- range .Neighbors}}
+ neighbor {{.Addr}} remote-as {{.ASN}}
+ neighbor {{.Addr}} timers connect 5
+{{- if .Port}}
+ neighbor {{.Addr}} port {{.Port}}
+{{- end}}
+{{- if .ExtendedNexthop}}
+ neighbor {{.Addr}} capability extended-nexthop
+{{- end}}
+{{- if .Password}}
+ neighbor {{.Addr}} password {{.Password}}
+{{- end}}
+{{- if .TTLSecurity}}
+ neighbor {{.Addr}} ttl-security hops 1
+{{- end}}
+{{- end}}
+ !
+ address-family ipv4 unicast
+{{- range .NetworksV4}}
+  network {{.}}
+{{- end}}
+{{- range .Neighbors}}
+  neighbor {{.Addr}} activate
+  neighbor {{.Addr}} route-map PERMIT in
+  neighbor {{.Addr}} route-map PERMIT out
+{{- end}}
+ exit-address-family
+ !
+ address-family ipv6 unicast
+{{- range .NetworksV6}}
+  network {{.}}
+{{- end}}
+{{- range .Neighbors}}
+  neighbor {{.Addr}} activate
+  neighbor {{.Addr}} route-map PERMIT in
+  neighbor {{.Addr}} route-map PERMIT out
+{{- end}}
+ exit-address-family
+!
+route-map PERMIT permit 10
+!

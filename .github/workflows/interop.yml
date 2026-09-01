@@ -1,0 +1,66 @@
+name: Interop
+
+# Interop tests drive a real BGP implementation (FRR today) against
+# this library. The oracle
+# runs as native daemons in unprivileged network namespaces, and the
+# repository's nix dev shell supplies both it and the Go toolchain, so
+# CI runs exactly what `nix develop` runs on a developer machine. The
+# tests live behind the interop build tag and a separate workflow so
+# the main Test job stays hermetic and fast; this runs on every push
+# and PR by design, demoted to main+nightly only if flakiness is ever
+# observed in practice.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Superseded runs on the same ref are pointless; cancel them. Never
+# cancel main, matching the Test workflow.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  interop:
+    name: FRR interop
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Allow unprivileged user namespaces
+        # Ubuntu 24.04 restricts unprivileged user namespace creation
+        # to binaries with an AppArmor profile, and the test binary
+        # re-executes itself into one (see interop/netns.go). The
+        # sysctl only exists where the restriction does, so a missing
+        # knob is fine — the restriction is absent with it.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: go vet
+        # The main Test workflow's vet/staticcheck legs never see the
+        # tagged interop files, so vet them here.
+        run: nix develop --command go vet -tags interop ./interop
+
+      - name: go test
+        env:
+          # The harness saves each FRR instance's logs here on
+          # teardown, so a failure's diagnostics survive as an
+          # artifact.
+          BGP_INTEROP_LOGDIR: ${{ runner.temp }}/interop-logs
+        run: nix develop --command go test -tags interop -race -v ./interop
+
+      - name: Upload router logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: interop-router-logs
+          path: ${{ runner.temp }}/interop-logs/
+          if-no-files-found: ignore
