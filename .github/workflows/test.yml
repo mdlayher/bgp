@@ -1,0 +1,124 @@
+name: Test
+
+# The workflow name above is load-bearing: README.md's status badge points at
+# https://github.com/mdlayher/bgp/workflows/Test/badge.svg.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Superseded runs on the same ref are pointless; cancel them. Never cancel
+# main, so the badge always reflects a completed run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          # The module targets the latest stable Go release, so there is no
+          # oldstable leg: an older toolchain could not satisfy go.mod's go
+          # directive without silently downloading a newer one anyway. The
+          # "stable" alias tracks the current release so this needs no edits.
+          go-version: stable
+          check-latest: true
+
+      - name: gofumpt
+        run: |
+          # The repo is held to gofumpt (a stricter superset of gofmt).
+          # Unpinned for the same reason as staticcheck below.
+          go install mvdan.cc/gofumpt@latest
+          files="$("$(go env GOPATH)/bin/gofumpt" -l .)"
+          if [ -n "$files" ]; then
+            echo "The following files are not gofumpt'd:"
+            echo "$files"
+            echo
+            "$(go env GOPATH)/bin/gofumpt" -d .
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: staticcheck
+        run: |
+          # Unpinned on purpose: staticcheck ships a new release for each Go
+          # release and an old pin silently stops understanding new language
+          # constructs. A pin can be introduced later if @latest ever breaks
+          # the build; the failure mode is loud and easy to diagnose.
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          "$(go env GOPATH)/bin/staticcheck" ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test -race -v ./...
+
+  fuzz:
+    name: Fuzz smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+
+      - name: Run each fuzz target briefly
+        run: |
+          set -euo pipefail
+
+          # Fuzz targets are enumerated at run time rather than hardcoded:
+          # targets are still being added, and a stale hardcoded list would
+          # either fail the job or silently skip new targets. Zero targets is
+          # a successful no-op.
+          count=0
+          while read -r pkg; do
+            # "go test -list" builds the test binary and prints one name per
+            # line; packages with no test files print "? pkg [no test files]"
+            # and exit 0. A genuine build failure is *not* swallowed: only the
+            # grep, which exits 1 on no match, is tolerated.
+            out="$(go test -list '^Fuzz' "$pkg")"
+            targets="$(printf '%s\n' "$out" | grep -E '^Fuzz[A-Za-z0-9_]*$' || true)"
+
+            for target in $targets; do
+              # Go permits exactly one -fuzz match per invocation, so each
+              # target gets its own run, anchored to an exact name.
+              echo "::group::$pkg $target"
+              go test "$pkg" -run '^$' -fuzz "^${target}\$" -fuzztime=30s
+              echo "::endgroup::"
+              count=$((count + 1))
+            done
+          done < <(go list ./...)
+
+          if [ "$count" -eq 0 ]; then
+            echo "No Fuzz* targets found; nothing to smoke test."
+          else
+            echo "Smoke tested $count fuzz target(s)."
+          fi
+
+      - name: Upload crashers
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-crashers
+          path: "**/testdata/fuzz/**"
+          if-no-files-found: ignore

@@ -1,0 +1,3 @@
+# Full-size MRT files fetched by fetch-mrt.sh; only the small checked-in
+# excerpt belongs in git.
+/large/
