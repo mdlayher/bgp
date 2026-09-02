@@ -1535,6 +1535,39 @@ func TestPeerOnStateChange(t *testing.T) {
 	})
 }
 
+func TestPeerAddr(t *testing.T) {
+	t.Parallel()
+
+	// A v4-mapped address normalizes, so Addr compares equal with the pure
+	// IPv4 form: the tie-break and Server-key use cases compare addresses
+	// directly.
+	p, err := NewPeer(netip.MustParseAddr("::ffff:192.0.2.2"), PeerConfig{
+		LocalASN: 64496,
+		LocalID:  MustParseIdentifier("192.0.2.1"),
+	})
+	if err != nil {
+		t.Fatalf("failed to create peer: %v", err)
+	}
+
+	if got, want := p.Addr(), netip.MustParseAddr("192.0.2.2"); got != want {
+		t.Fatalf("unexpected peer address: got %v, want %v", got, want)
+	}
+
+	// An unaddressed peering reports the zero Addr.
+	p, err = NewPeer(netip.Addr{}, PeerConfig{
+		LocalASN: 64496,
+		LocalID:  MustParseIdentifier("192.0.2.1"),
+		Passive:  true,
+	})
+	if err != nil {
+		t.Fatalf("failed to create passive peer: %v", err)
+	}
+
+	if addr := p.Addr(); addr.IsValid() {
+		t.Fatalf("expected a zero address from an unaddressed peer, but got: %v", addr)
+	}
+}
+
 // TestPeerAddrRequiredToDial verifies that the built-in Dialer path still
 // demands real addressing: only a DialFunc transport may go unaddressed.
 func TestPeerAddrRequiredToDial(t *testing.T) {

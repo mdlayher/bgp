@@ -351,6 +351,17 @@ func NewPeer(addr netip.Addr, c PeerConfig) (*Peer, error) {
 	return p, nil
 }
 
+// Addr returns the remote address of the peering: NewPeer's addr,
+// normalized, or the zero Addr when none was given. It is the peering's
+// stable address for callers which hold only a Peer, such as a RIB breaking
+// ties on lowest peer address, and it does not vary with the transport the
+// way [Session.RemoteAddr] does. A peering whose transport does not address
+// peers by IP, such as a DialFunc transport, may still set addr so the
+// peering carries a stable address here.
+func (p *Peer) Addr() netip.Addr {
+	return p.addr
+}
+
 // Run drives the peering until ctx is canceled: one FSM Connect after
 // another, forever, with a short jittered idle hold after each failure. A
 // session failure goes to OnClose and is retried. Cancellation is the only
