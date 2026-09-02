@@ -69,10 +69,10 @@ type fsmConn struct {
 	// so a late collision connection does not inherit an earlier one's
 	// nearly spent timer — reset to the negotiated hold time on entering
 	// OpenConfirm, and reset again as the session's hold timer at
-	// establishment. keepaliveT feeds the peer's own hold timer at a third
-	// of the negotiated hold: like attempt.connectRetryT it exists, stopped, from
-	// construction, so no arm needs a nil check, and is armed when the
-	// peer's OPEN is accepted. kill stops both.
+	// establishment. keepaliveT feeds the peer's own hold timer at a
+	// jittered third of the negotiated hold: like attempt.connectRetryT it
+	// exists, stopped, from construction, so no arm needs a nil check, and
+	// is armed when the peer's OPEN is accepted. kill stops both.
 	holdT      *time.Timer
 	holdC      <-chan time.Time
 	keepaliveT *time.Timer

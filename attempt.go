@@ -562,7 +562,7 @@ func (a *attempt) keepaliveTimerExpires(fc *fsmConn) error {
 		return a.drop(fc, nil, Close{Err: err, Local: true})
 	}
 
-	fc.keepaliveT.Reset(fc.sess.HoldTime / 3)
+	fc.keepaliveT.Reset(a.f.jittered(fc.sess.HoldTime / 3))
 	return nil
 }
 
@@ -669,7 +669,7 @@ func (a *attempt) bgpOpen(fc *fsmConn, o *Open) error {
 
 	fc.state = StateOpenConfirm
 	fc.holdT.Reset(fc.sess.HoldTime)
-	fc.keepaliveT.Reset(fc.sess.HoldTime / 3)
+	fc.keepaliveT.Reset(a.f.jittered(fc.sess.HoldTime / 3))
 	a.f.log.Info("OPEN accepted", "state", StateOpenConfirm, "origin", fc.origin)
 	fc.instructionC <- instructionContinue
 	return nil
@@ -741,7 +741,7 @@ func (a *attempt) established(ctx context.Context, fc *fsmConn) error {
 	// the KEEPALIVE which established): same timers, same cadence, but from
 	// here the keepalives go through the writer goroutine.
 	keepaliveT, holdT := fc.keepaliveT, fc.holdT
-	keepaliveT.Reset(hold / 3)
+	keepaliveT.Reset(a.f.jittered(hold / 3))
 	defer keepaliveT.Stop()
 	holdT.Reset(hold)
 	defer holdT.Stop()
@@ -786,7 +786,7 @@ func (a *attempt) established(ctx context.Context, fc *fsmConn) error {
 				a.f.log.Debug("dropped keepalive: writer is busy")
 			}
 
-			keepaliveT.Reset(hold / 3)
+			keepaliveT.Reset(a.f.jittered(hold / 3))
 
 		case <-holdT.C:
 			elapsed := time.Duration(fc.sinceBase() - fc.lastRecv.Load())

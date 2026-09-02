@@ -758,7 +758,8 @@ func (f *FSM) shutdownCease(ctx context.Context) *Notification {
 var implicitFamilies = []Family{{AFI: AFIIPv4, SAFI: SAFIUnicast}}
 
 // jittered scales d by a random factor in [0.75, 1.0], the jitter RFC 4271,
-// section 10 applies to retry timers so peers do not synchronize.
+// section 10 applies to the retry and keepalive timers so peers do not
+// synchronize.
 func (f *FSM) jittered(d time.Duration) time.Duration {
 	return time.Duration(float64(d) * (0.75 + 0.25*f.jitter()))
 }
