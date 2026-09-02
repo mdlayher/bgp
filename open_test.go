@@ -161,6 +161,21 @@ func TestOpenAppendBinaryErrors(t *testing.T) {
 				},
 			},
 		},
+		{
+			// The one-byte optional parameters length also counts the
+			// Capabilities parameter's type and length bytes, so 254 bytes
+			// of capabilities (6 auto four-octet + 2 header + 246 data)
+			// overflow it by one even though they fit the parameter's own
+			// length byte.
+			name: "capabilities overflow optional parameters length",
+			o: &Open{
+				ASN: 64496,
+				ID:  MustParseIdentifier("192.0.2.1"),
+				Capabilities: []Capability{
+					{Code: CapabilityFQDN, Data: make([]byte, 246)},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -171,6 +186,42 @@ func TestOpenAppendBinaryErrors(t *testing.T) {
 				t.Fatal("expected an error, but none occurred")
 			}
 		})
+	}
+}
+
+// TestOpenCapabilitiesMax pins the capabilities size boundary: the largest
+// capability set whose Capabilities parameter fits the one-byte optional
+// parameters length must survive a wire round trip. One byte more is an
+// AppendBinary error, exercised by TestOpenAppendBinaryErrors, never a
+// silently corrupt message for the peer to reject.
+func TestOpenCapabilitiesMax(t *testing.T) {
+	t.Parallel()
+
+	// The auto-generated Four-Octet AS Number capability occupies 6 bytes
+	// and this capability's header 2 more, so 245 bytes of data lands the
+	// parameter contents at exactly 253: an optional parameters length of
+	// 255.
+	o := &Open{
+		ASN: 64496,
+		ID:  MustParseIdentifier("192.0.2.1"),
+		Capabilities: []Capability{
+			{Code: CapabilityFQDN, Data: make([]byte, 245)},
+		},
+	}
+
+	b, err := o.AppendBinary(nil)
+	if err != nil {
+		t.Fatalf("failed to marshal OPEN: %v", err)
+	}
+
+	m, err := ParseMessage(b)
+	if err != nil {
+		t.Fatalf("failed to parse OPEN: %v", err)
+	}
+
+	caps := m.(*Open).Capabilities
+	if len(caps) != 1 || len(caps[0].Data) != 245 {
+		t.Fatalf("unexpected parsed capabilities: %+v", caps)
 	}
 }
 

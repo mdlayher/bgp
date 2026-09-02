@@ -97,8 +97,10 @@ func (o *Open) AppendBinary(b []byte) ([]byte, error) {
 		}
 	}
 
-	// All capabilities reside in a single Capabilities optional parameter.
-	if len(caps) > math.MaxUint8 {
+	// All capabilities reside in a single Capabilities optional parameter,
+	// and the one-byte total optional parameters length below also counts
+	// that parameter's own type and length bytes.
+	if len(caps) > math.MaxUint8-2 {
 		return nil, errors.New("bgp: OPEN capabilities too large")
 	}
 
