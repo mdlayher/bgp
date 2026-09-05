@@ -96,20 +96,51 @@ var (
 	_ Message = (*RouteRefresh)(nil)
 )
 
-// ParseMessage parses a Message from b, which must contain exactly one BGP
-// message.
+// ParseMessage parses a [Message] from b, which must contain exactly one
+// BGP message.
 //
 // To avoid copies, a parsed Message references b: do not modify or reuse b
 // while the Message or data taken from it remains in use. To retain a
-// Message longer, copy the referenced data (RawAttribute.Data,
-// Capability.Data, and Notification.Data): the Clone methods on Update,
-// Open, and Notification detach a whole message at once, RawAttributes.Clone
-// detaches an attribute list alone, and RawAttribute.Parse returns
-// Attributes which never reference b.
+// Message longer, copy the referenced data ([RawAttribute.Data],
+// [Capability.Data], and [Notification.Data]): the Clone methods on
+// [Update], [Open], and [Notification] detach a whole message at once,
+// [RawAttributes.Clone] detaches an attribute list alone, and
+// [RawAttribute.Parse] returns [Attribute] values which never reference b.
 //
-// A malformed message produces a *MessageError describing the Notification
-// RFC 4271 requires in response.
+// A malformed message produces a [*MessageError] describing the
+// Notification RFC 4271 requires in response.
+//
+// ParseMessage knows no session, so it never decodes RFC 7911 path
+// identifiers. Whether an NLRI entry carries one is negotiated per session
+// and per family, and is not recognizable from the bytes. Messages read on
+// a [Conn] are parsed with their session's negotiation instead. A caller
+// which knows the negotiation itself uses [ParseMessageAddPath]; see
+// [Session.AddPath].
 func ParseMessage(b []byte) (Message, error) {
+	return parseMessage(b, nil)
+}
+
+// ParseMessageAddPath parses a [Message] from b like [ParseMessage], but
+// decodes RFC 7911 path identifiers in any UPDATE for the given families.
+// The families are the add-path receive set of the session the message
+// traveled on, from the receiver's perspective.
+//
+// It serves consumers which see a session's messages without holding its
+// [Conn], such as a BMP station. A station learns the negotiation from
+// the OPENs a Peer Up message embeds, decoding each side's capability via
+// [Capability.AddPath].
+//
+// Only prefix shaped families support add-path; any other family in the
+// set is ignored. The aliasing contract is [ParseMessage]'s.
+func ParseMessageAddPath(b []byte, addPath []Family) (Message, error) {
+	return parseMessage(b, addPath)
+}
+
+// parseMessage implements ParseMessage. addPath is the add-path receive
+// set of the session the message arrived on: the families whose inbound
+// NLRI entries carry path identifiers (RFC 7911), which a session-free
+// parse cannot know. Only UPDATE parsing consumes it.
+func parseMessage(b []byte, addPath []Family) (Message, error) {
 	if len(b) < headerLen {
 		return nil, headerError(SubcodeBadMessageLength, nil,
 			"message too short: %d bytes", len(b))
@@ -149,7 +180,7 @@ func ParseMessage(b []byte) (Message, error) {
 	case MessageTypeOpen:
 		m, err = parseOpen(body)
 	case MessageTypeUpdate:
-		m, err = parseUpdate(body)
+		m, err = parseUpdate(body, addPath)
 	case MessageTypeNotification:
 		m, err = parseNotification(body)
 	case MessageTypeKeepalive:

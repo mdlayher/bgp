@@ -6,6 +6,13 @@ policy engine.
 
 ## Language
 
+**Add-path**:
+The extension (RFC 7911) by which a session carries multiple paths for
+the same prefix at once, each NLRI entry qualified by a sender-assigned
+path identifier. Negotiated per family and per direction; choosing the
+paths to send and keying stored routes by identifier are the caller's
+RIB's.
+
 **Adj-RIB-In**:
 The routes learned from one specific peer, before policy and selection.
 Per-peer; owned by the caller's RIB.

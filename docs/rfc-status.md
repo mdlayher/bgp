@@ -33,12 +33,13 @@ planned, or explicitly rejected.
 | 9234 | OTC attribute | Done 2026-08-16: typed OTC, corpus-motivated. Role capability/negotiation out of scope; revisit with the FSM if demanded |
 | 4724 | Graceful restart | Done 2026-08-17, negotiation surface only: capability codec, Identity.GracefulRestart with per-attempt Restart State via Restarting, Session.GracefulRestart, NewEndOfRIB/Update.EndOfRIB. Helper behavior is permanently the caller's RIB's: stale retention, the restart timer, and the End-of-RIB sweep. Restarting-speaker R/F bits are caller-asserted |
 | 8538 | GR notification support / Hard Reset | Done 2026-08-17 at the wire: the N bit is encoded and SubcodeCeaseHardReset is named, so a helper can honor both; retention policy is the caller's. A handler can send Hard Reset via *MessageError today; a shutdown-path knob for it is deferred until demanded |
+| 7911 | Add-path | Done 2026-09-02, demanded by bgpdev, in the shape parked 2026-08-16: PathPrefixes of {ID, Prefix} as one more NLRI implementation. Capability codec (AddPathCapability, code 69), Identity.AddPath advertisement, per-family per-direction negotiation into Session.AddPath, Update.NLRIPaths/WithdrawnPaths for the top level fields, and session-aware receive parsing: the FSM publishes the negotiated receive set on its Conn, so handler-delivered NLRI arrives typed while bare ParseMessage stays stateless and never decodes path IDs; ParseMessageAddPath is the entry for an out-of-Conn consumer which knows the negotiation, such as a BMP station (demanded by bmp, 2026-09-02). Prefix shaped families only; path selection and identifier assignment are the caller's RIB's |
 
 ## Planned
 
 | RFC | Subject | Where |
 |---|---|---|
-| 7606 | Revised UPDATE error handling | FSM follow-up; owns attribute flag validation and duplicate detection (decided 2026-08-16). Interim stance (2026-08-17): a malformed UPDATE is terminal for the session, exactly RFC 4271. Treat-as-withdraw is an API decision to be made deliberately when this lands, not as a side effect: it classifies attribute errors at the parse layer and delivers a withdraw-only view of the UPDATE to OnUpdate |
+| 7606 | Revised UPDATE error handling | FSM follow-up; owns attribute flag validation and duplicate detection (decided 2026-08-16). Interim stance (2026-08-17): a malformed UPDATE is terminal for the session, exactly RFC 4271. Treat-as-withdraw is an API decision to be made deliberately when this lands, not as a side effect: it classifies attribute errors at the parse layer and delivers a withdraw-only view of the UPDATE to OnUpdate. Confirmed by fault injection (bgpdev, 2026-09-02): conflicting flags are accepted today, e.g. ORIGIN with the Optional bit set (C0 01 01 00) draws no Attribute Flags Error; deliberately left for this work, since 7606 reclassifies that very case to treat-as-withdraw and a 4271 subcode 4 reject built first would be torn out |
 
 ## Unsupported: revisit if demanded
 
@@ -46,7 +47,6 @@ planned, or explicitly rejected.
 |---|---|---|
 | 8654 | Extended messages (>4096 bytes) | No mainstream requirement; read path centralizes the max-size constant so support is one line of plumbing plus negotiation |
 | 9072 | Extended optional parameters length | Matters only when OPEN capabilities exceed 255 bytes; we are nowhere near. Typed error (Unsupported Optional Parameter) on receipt. Revisit if interop meets it |
-| 7911 | Add-path | Parked by design (2026-08-16): with NLRI an interface, a path-ID mode is one more implementation rather than a fork of the prefix codecs, such as a PathPrefixes of {ID, Prefix}. RawNLRI unblocks a caller meanwhile. Revisit when a consumer demands it |
 | 4761 | VPLS | Named (SAFIVPLS) but unmodeled (2026-08-18): its NLRI is carried verbatim as RawNLRI, so a caller is not blocked; legacy relative to EVPN. Revisit if a consumer demands it |
 | 4364 / 8277 | L3VPN and labeled unicast | Route semantics unmodeled: their NLRI is carried verbatim as RawNLRI, and their RD-prefixed next hops (12/24/48 bytes, RDs mandated zero and managed by the codec) fit MPReachNLRI.NextHop, so such attributes typed-parse whole (2026-08-18). SAFIMPLSVPN is named and classified; SAFI 129 shares the next hop encoding and is the trigger to extend rdNextHop if a consumer demands it |
 | 8955 | Flowspec | Unmodeled: its NLRI is carried verbatim as RawNLRI and its absent next hop (length 0) parses and marshals (2026-08-18); the rule grammar is the caller's. Revisit if a consumer demands it |

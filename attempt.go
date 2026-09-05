@@ -632,6 +632,21 @@ func (a *attempt) bgpOpen(fc *fsmConn, o *Open) error {
 	fc.sess.LocalAddr = fc.c.LocalAddr()
 	fc.sess.RemoteAddr = fc.c.RemoteAddr()
 
+	// Publish the add-path receive set before the confirming KEEPALIVE
+	// below can be written: the peer sends no UPDATE until that KEEPALIVE
+	// establishes its session, so the connection's reader parses every
+	// add-path NLRI entry with its path identifier.
+	if len(sess.AddPath) > 0 {
+		var recv []Family
+		for _, af := range sess.AddPath {
+			if af.Receive {
+				recv = append(recv, af.Family)
+			}
+		}
+
+		fc.c.setAddPath(recv)
+	}
+
 	// A second tracked connection is a collision (RFC 4271, section 6.8),
 	// resolved now that the peer's identifier is known: the connection
 	// initiated by the speaker with the higher identifier lives.

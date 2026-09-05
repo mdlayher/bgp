@@ -68,7 +68,7 @@ func TestParseNLRIShape(t *testing.T) {
 				b = pfx
 			}
 
-			got, err := parseNLRI(bytes.Clone(b), tt.f)
+			got, err := parseNLRI(bytes.Clone(b), tt.f, false)
 			if err != nil {
 				t.Fatalf("failed to parse NLRI: %v", err)
 			}
@@ -95,7 +95,7 @@ func TestParseNLRIEmptyIsNil(t *testing.T) {
 		t.Run(f.String(), func(t *testing.T) {
 			t.Parallel()
 
-			got, err := parseNLRI(nil, f)
+			got, err := parseNLRI(nil, f, false)
 			if err != nil {
 				t.Fatalf("failed to parse NLRI: %v", err)
 			}
@@ -196,13 +196,13 @@ func TestNLRINeverAliasesBuffer(t *testing.T) {
 			t.Parallel()
 
 			buf := bytes.Clone(tt.b)
-			got, err := parseNLRI(buf, tt.f)
+			got, err := parseNLRI(buf, tt.f, false)
 			if err != nil {
 				t.Fatalf("failed to parse NLRI: %v", err)
 			}
 
 			// Reuse the buffer, exactly as Conn.ReadMessage would.
-			want, err := parseNLRI(bytes.Clone(tt.b), tt.f)
+			want, err := parseNLRI(bytes.Clone(tt.b), tt.f, false)
 			if err != nil {
 				t.Fatalf("failed to reparse NLRI: %v", err)
 			}
@@ -223,8 +223,8 @@ func TestRawNLRIBelongsToAnyFamily(t *testing.T) {
 
 	// RawNLRI is the escape hatch, so it must not be fenced to the families
 	// this package declines to model: a caller may use it to send a shape
-	// this package models differently, such as the path-ID NLRI of RFC 7911
-	// (unsupported; see rfc-status).
+	// this package models differently, such as the path-ID NLRI of RFC
+	// 7911 on a session whose negotiation this package did not see.
 	raw := RawNLRI{0x00, 0x00, 0x00, 0x01, 24, 192, 0, 2}
 
 	b, err := raw.appendNLRI(nil, Family{AFI: AFIIPv4, SAFI: SAFIUnicast})

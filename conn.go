@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -41,6 +42,16 @@ type Conn struct {
 	// see FSMConfig.OnMessage. It is installed once, under both locks, by
 	// the FSM which adopts the Conn.
 	tap func(MessageEvent)
+
+	// addPath is the add-path receive set of the session negotiated on
+	// this connection: the families whose inbound NLRI entries carry path
+	// identifiers (RFC 7911), consulted by ReadMessage on every parse. An
+	// atomic rather than an rmu field because the reader goroutine may be
+	// blocked mid-read when negotiation completes: the FSM publishes the
+	// set before its confirming KEEPALIVE is written, and the peer cannot
+	// send an UPDATE until that KEEPALIVE establishes its session, so
+	// every add-path message is parsed under the set.
+	addPath atomic.Pointer[[]Family]
 }
 
 // NewConn creates a Conn which sends and receives BGP messages over c, which
@@ -51,6 +62,15 @@ func NewConn(c net.Conn) *Conn {
 		c:  c,
 		br: bufio.NewReaderSize(c, readBufferSize),
 		wb: make([]byte, 0, MaxMessageSize),
+	}
+}
+
+// setAddPath publishes the session's add-path receive set for ReadMessage;
+// see the field. Called by the FSM when negotiation accepts the peer's
+// OPEN, before the exchange completes.
+func (c *Conn) setAddPath(fams []Family) {
+	if len(fams) > 0 {
+		c.addPath.Store(&fams)
 	}
 }
 
@@ -136,9 +156,16 @@ func (c *Conn) ReadMessage() (Message, error) {
 		return nil, err
 	}
 
-	// ParseMessage validates the marker and length again. The duplicated work
-	// is cheap, and keeps ParseMessage the package's only parser.
-	m, err := ParseMessage(b)
+	// parseMessage validates the marker and length again. The duplicated
+	// work is cheap, and keeps ParseMessage the package's only parser; the
+	// add-path receive set is the session context a bare ParseMessage
+	// cannot have.
+	var ap []Family
+	if p := c.addPath.Load(); p != nil {
+		ap = *p
+	}
+
+	m, err := parseMessage(b, ap)
 	c.observeLocked(DirectionReceived, b, m, err)
 	if err != nil {
 		return nil, err

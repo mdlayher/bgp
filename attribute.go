@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/netip"
+	"slices"
 )
 
 // AttrFlags describe a BGP path attribute, as described in RFC 4271,
@@ -55,7 +56,19 @@ const (
 type RawAttribute struct {
 	Flags AttrFlags
 	Type  AttrType
-	Data  []byte
+
+	// addPath marks a multiprotocol attribute whose NLRI entries each
+	// carry a path identifier (RFC 7911): set by parseUpdate when the
+	// attribute's family is one the session negotiated add-path receive
+	// for, and consumed by Parse, which then produces PathPrefixes. Never
+	// set on an attribute a caller constructs: a sender chooses the
+	// encoding by the NLRI type it supplies. Declared before Data so it
+	// occupies alignment padding which exists regardless: a RIB retains
+	// these at full-table scale, and moving it after Data grows the
+	// struct by 8 bytes.
+	addPath bool
+
+	Data []byte
 }
 
 // Parse decodes a RawAttribute into a typed Attribute. Attributes of a type
@@ -184,14 +197,14 @@ func (a RawAttribute) parse() (Attribute, error) {
 
 		return ecs, nil
 	case AttrMPReachNLRI:
-		m, err := parseMPReachNLRI(a.Data)
+		m, err := parseMPReachNLRI(a.Data, a.addPath)
 		if err != nil {
 			return nil, err
 		}
 
 		return m, nil
 	case AttrMPUnreachNLRI:
-		m, err := parseMPUnreachNLRI(a.Data)
+		m, err := parseMPUnreachNLRI(a.Data, a.addPath)
 		if err != nil {
 			return nil, err
 		}
@@ -229,6 +242,20 @@ func (a RawAttribute) parse() (Attribute, error) {
 // of a type this package does not interpret. It is a plain error, not a
 // *MessageError: an unrecognized attribute is not a protocol error.
 var errUnknownAttribute = errors.New("bgp: cannot parse attribute of unknown type")
+
+// mpFamily returns the address family a multiprotocol attribute names in
+// its first three data bytes. It returns false for an attribute of any
+// other type, or one too short to name a family.
+func (a RawAttribute) mpFamily() (Family, bool) {
+	if (a.Type != AttrMPReachNLRI && a.Type != AttrMPUnreachNLRI) || len(a.Data) < 3 {
+		return Family{}, false
+	}
+
+	return Family{
+		AFI:  AFI(binary.BigEndian.Uint16(a.Data[0:2])),
+		SAFI: SAFI(a.Data[2]),
+	}, true
+}
 
 // RawAttribute implements Attribute so that an attribute this package does
 // not interpret travels through MarshalAttributes unmodified, as RFC 4271,
@@ -307,6 +334,22 @@ func (as RawAttributes) Parse() ([]Attribute, error) {
 	}
 
 	return attrs, nil
+}
+
+// markAddPath marks the multiprotocol attributes of the add-path receive
+// families fs, so a later typed parse decodes their path identifiers
+// without the caller re-supplying the negotiation; see RawAttribute.addPath.
+// A short attribute is left unmarked for its parse to reject.
+func (as RawAttributes) markAddPath(fs []Family) {
+	if len(fs) == 0 {
+		return
+	}
+
+	for i, a := range as {
+		if f, ok := a.mpFamily(); ok && slices.Contains(fs, f) {
+			as[i].addPath = true
+		}
+	}
 }
 
 // Lookup finds the first attribute of as whose type is T's and parses it,

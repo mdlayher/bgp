@@ -80,8 +80,11 @@ func (m MPReachNLRI) appendData(b []byte) ([]byte, error) {
 	return appendNLRI(b, m.NLRI, m.Family)
 }
 
-// parseMPReachNLRI parses the data of an MP_REACH_NLRI attribute.
-func parseMPReachNLRI(b []byte) (MPReachNLRI, error) {
+// parseMPReachNLRI parses the data of an MP_REACH_NLRI attribute. addPath
+// reports that the attribute arrived on a session which negotiated the
+// add-path extension for its family in the receive direction; see
+// RawAttribute.addPath.
+func parseMPReachNLRI(b []byte, addPath bool) (MPReachNLRI, error) {
 	if len(b) < 5 {
 		return MPReachNLRI{}, updateError(SubcodeOptionalAttributeError, nil,
 			"invalid MP_REACH_NLRI attribute length %d", len(b))
@@ -142,7 +145,7 @@ func parseMPReachNLRI(b []byte) (MPReachNLRI, error) {
 	}
 
 	// One reserved byte, then NLRI.
-	nlri, err := parseNLRI(b[4+n+1:], m.Family)
+	nlri, err := parseNLRI(b[4+n+1:], m.Family, addPath)
 	if err != nil {
 		return MPReachNLRI{}, err
 	}
@@ -185,8 +188,9 @@ func (m MPUnreachNLRI) appendData(b []byte) ([]byte, error) {
 	return appendNLRI(b, m.NLRI, m.Family)
 }
 
-// parseMPUnreachNLRI parses the data of an MP_UNREACH_NLRI attribute.
-func parseMPUnreachNLRI(b []byte) (MPUnreachNLRI, error) {
+// parseMPUnreachNLRI parses the data of an MP_UNREACH_NLRI attribute;
+// addPath is as in parseMPReachNLRI.
+func parseMPUnreachNLRI(b []byte, addPath bool) (MPUnreachNLRI, error) {
 	if len(b) < 3 {
 		return MPUnreachNLRI{}, updateError(SubcodeOptionalAttributeError, nil,
 			"invalid MP_UNREACH_NLRI attribute length %d", len(b))
@@ -197,7 +201,7 @@ func parseMPUnreachNLRI(b []byte) (MPUnreachNLRI, error) {
 		SAFI: SAFI(b[2]),
 	}}
 
-	nlri, err := parseNLRI(b[3:], m.Family)
+	nlri, err := parseNLRI(b[3:], m.Family, addPath)
 	if err != nil {
 		return MPUnreachNLRI{}, err
 	}

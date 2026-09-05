@@ -92,6 +92,86 @@ func TestNegotiatedFamilies(t *testing.T) {
 	}
 }
 
+func TestNegotiatedAddPath(t *testing.T) {
+	t.Parallel()
+
+	var (
+		v4u = Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+		v6u = Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+	)
+
+	fams := []Family{v4u, v6u}
+	cap1 := func(f AddPathFamily) Capability { return must(AddPathCapability(f)) }
+
+	tests := []struct {
+		name string
+		ours []AddPathFamily
+		fams []Family
+		caps []Capability
+		want []AddPathFamily
+	}{
+		{
+			name: "not configured",
+			fams: fams,
+			caps: []Capability{cap1(AddPathFamily{Family: v4u, Send: true, Receive: true})},
+		},
+		{
+			name: "peer without capability",
+			ours: []AddPathFamily{{Family: v4u, Send: true, Receive: true}},
+			fams: fams,
+		},
+		{
+			// Send needs the peer's Receive and Receive needs the peer's
+			// Send, per direction and per family.
+			name: "directions crossed",
+			ours: []AddPathFamily{
+				{Family: v4u, Send: true, Receive: true},
+				{Family: v6u, Send: true},
+			},
+			fams: fams,
+			caps: []Capability{must(AddPathCapability(
+				AddPathFamily{Family: v4u, Send: true},
+				AddPathFamily{Family: v6u, Send: true},
+			))},
+			want: []AddPathFamily{{Family: v4u, Receive: true}},
+		},
+		{
+			name: "family not negotiated",
+			ours: []AddPathFamily{{Family: v6u, Send: true, Receive: true}},
+			fams: []Family{v4u},
+			caps: []Capability{cap1(AddPathFamily{Family: v6u, Send: true, Receive: true})},
+		},
+		{
+			name: "malformed capability skipped",
+			ours: []AddPathFamily{{Family: v4u, Send: true, Receive: true}},
+			fams: fams,
+			caps: []Capability{{Code: CapabilityAddPath, Data: []byte{0xff}}},
+		},
+		{
+			// RFC 7911 forbids duplicate families, so the first entry wins
+			// on receipt.
+			name: "peer duplicate first wins",
+			ours: []AddPathFamily{{Family: v4u, Send: true, Receive: true}},
+			fams: fams,
+			caps: []Capability{must(AddPathCapability(
+				AddPathFamily{Family: v4u, Receive: true},
+				AddPathFamily{Family: v4u, Send: true},
+			))},
+			want: []AddPathFamily{{Family: v4u, Send: true}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if d := diff(t, tt.want, negotiatedAddPath(tt.ours, tt.fams, tt.caps)); d != "" {
+				t.Fatalf("unexpected add-path families (-want +got):\n%s", d)
+			}
+		})
+	}
+}
+
 func TestExtendedNextHopFamilies(t *testing.T) {
 	t.Parallel()
 

@@ -226,6 +226,7 @@ const (
 	CapabilityExtendedNextHop CapabilityCode = 5
 	CapabilityGracefulRestart CapabilityCode = 64
 	CapabilityFourOctetAS     CapabilityCode = 65
+	CapabilityAddPath         CapabilityCode = 69
 	CapabilityFQDN            CapabilityCode = 73
 )
 
@@ -415,6 +416,89 @@ func (c Capability) GracefulRestart() (GracefulRestart, error) {
 	}
 
 	return gr, nil
+}
+
+// An AddPathFamily is one family entry of an add-path capability (RFC
+// 7911): an address family, and the directions in which the speaker is able
+// to use multiple paths for it. In a Session's negotiated result the
+// directions are what actually applies to this speaker; see
+// [Session.AddPath].
+type AddPathFamily struct {
+	// Family is the address family.
+	Family Family
+
+	// Send reports the ability to send multiple paths for the family:
+	// NLRI entries carrying path identifiers.
+	Send bool
+
+	// Receive reports the ability to receive multiple paths for the
+	// family.
+	Receive bool
+}
+
+// AddPathCapability produces a Capability which advertises the add-path
+// extension (RFC 7911) for the given families. Every entry must name at
+// least one direction: the wire encodes nothing else.
+//
+// An FSM or Peer advertises add-path through Identity.AddPath, not by
+// placing this Capability in Capabilities: negotiation must know the
+// configured directions to produce [Session.AddPath].
+func AddPathCapability(fs ...AddPathFamily) (Capability, error) {
+	b := make([]byte, 0, 4*len(fs))
+	for _, f := range fs {
+		if !f.Send && !f.Receive {
+			return Capability{}, fmt.Errorf("bgp: add-path family %s must name at least one direction", f.Family)
+		}
+
+		b = binary.BigEndian.AppendUint16(b, uint16(f.Family.AFI))
+		b = append(b, byte(f.Family.SAFI))
+
+		var sr byte
+		if f.Receive {
+			sr |= 1
+		}
+
+		if f.Send {
+			sr |= 2
+		}
+
+		b = append(b, sr)
+	}
+
+	return Capability{Code: CapabilityAddPath, Data: b}, nil
+}
+
+// AddPath parses the families and directions a CapabilityAddPath Capability
+// advertises, as described in RFC 7911, section 4. The result never
+// references Data, so it remains valid after the buffer Data references is
+// reused.
+func (c Capability) AddPath() ([]AddPathFamily, error) {
+	if c.Code != CapabilityAddPath {
+		return nil, fmt.Errorf("bgp: capability %d is not an add-path capability", uint8(c.Code))
+	}
+
+	if len(c.Data)%4 != 0 {
+		return nil, errors.New("bgp: invalid add-path capability")
+	}
+
+	fs := make([]AddPathFamily, 0, len(c.Data)/4)
+	for d := c.Data; len(d) > 0; d = d[4:] {
+		sr := d[3]
+		if sr == 0 || sr > 3 {
+			return nil, fmt.Errorf("bgp: invalid add-path capability send/receive value %d", sr)
+		}
+
+		fs = append(fs, AddPathFamily{
+			Family: Family{
+				AFI:  AFI(binary.BigEndian.Uint16(d[0:2])),
+				SAFI: SAFI(d[2]),
+			},
+			Send:    sr&2 != 0,
+			Receive: sr&1 != 0,
+		})
+	}
+
+	return fs, nil
 }
 
 // FQDNCapability produces a Capability which advertises the speaker's

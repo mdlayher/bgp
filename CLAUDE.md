@@ -9,7 +9,8 @@ Run these on every Go change, alongside `go build` and `go test`:
 - `gofumpt -l .` (CI enforces gofumpt; keep stderr visible so a bad path
   can't look like a clean run)
 - `go vet ./...`
-- `staticcheck ./...` (CI enforces it)
+- `staticcheck ./...` (CI enforces it; if the system binary is too old for
+  the toolchain, use `go run honnef.co/go/tools/cmd/staticcheck@latest ./...`)
 - `gopls check -severity=hint <changed files>` (catches unusedfunc,
   modernize, typeargs, and other hint-level findings vet and staticcheck
   miss)
@@ -39,6 +40,10 @@ Declaration layout:
 - A type and all of its methods stay contiguous. Supporting enums and codes
   go before the type that uses them. Constructor/decoder pairs sit together
   (e.g. `MultiprotocolCapability` beside `Capability.Multiprotocol`).
+- Paired values described by one doc comment share one declaration
+  (`PeerASN, LocalASN uint32`). A doc comment attaches to the declaration,
+  so separate lines leave every name after the first undocumented in go doc
+  and IDE hover.
 - Exception: files deliberately organized by theme or flow keep that layout
   (e.g. `bgp_clone.go` as a file of Clone methods; `attempt.go`,
   `fsmconn.go`, and `negotiate.go` in FSM flow order).
@@ -63,6 +68,9 @@ Markdown documents:
 
 - Never sleep in tests. Every awaited condition must be signaled; poll
   loops with sleep intervals count as sleeping.
+- Independent scenarios are individual top-level Test functions. `t.Run`
+  is for a table's cases and for subtests sharing a fixture built by the
+  parent, such as one Test with per-case setup on a shared listener.
 - Test scenarios, not coverage. Cover paths a plausible real-world scenario
   hits, framed on behavior; 100% coverage is not a goal.
 - Test helpers, rig types, and shared fixtures go at the end of test files,

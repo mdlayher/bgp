@@ -422,11 +422,19 @@ func FuzzParseMessage(f *testing.F) {
 // slices as equivalent, since the wire format cannot distinguish them.
 func diff[T any](tb testing.TB, want, got T) string {
 	tb.Helper()
+
 	return cmp.Diff(
 		want, got,
 		// Open.fourOctet is a parse-side signal for the FSM, pinned by
 		// TestParseOpenFourOctet rather than compared structurally.
+		// Comparing it would force every round-trip want to declare the
+		// post-parse state; that is deferred as a follow-up.
 		cmpopts.IgnoreUnexported(Open{}),
+		// RawAttribute.addPath is compared rather than ignored: a wrong
+		// add-path mark silently corrupts NLRI decoding, so a want value
+		// asserts the expected state. cmp needs permission to read it, and
+		// being in-package, the tests set it on their wants directly.
+		cmp.AllowUnexported(RawAttribute{}),
 		cmp.Comparer(func(x, y netip.Addr) bool { return x == y }),
 		cmp.Comparer(func(x, y netip.Prefix) bool { return x == y }),
 		cmp.Comparer(func(x, y NextHop) bool { return netip.Addr(x) == netip.Addr(y) }),

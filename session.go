@@ -97,6 +97,18 @@ type Session struct {
 	// IPv6 next hop, an MPReachNLRI.NextHop the caller builds.
 	ExtendedNextHop []Family
 
+	// AddPath lists the families for which the add-path extension (RFC
+	// 7911) was negotiated, with the directions that apply to this
+	// speaker. Send means this speaker may advertise multiple paths for
+	// the family, each NLRI entry carrying a path identifier. Those
+	// entries are PathPrefixes in a multiprotocol attribute, or the
+	// Update NLRIPaths and WithdrawnPaths fields for IPv4 unicast at the
+	// top level. Receive means the peer will do the same, so this
+	// session's inbound NLRI for the family arrives in those forms.
+	// Assigning identifiers and selecting the paths to send remain the
+	// caller's RIB's.
+	AddPath []AddPathFamily
+
 	// GracefulRestart is the peer's decoded graceful restart capability
 	// (RFC 4724), or nil when the peer advertised none, or only a
 	// malformed one. Like Peer, it is fully owned and remains valid after

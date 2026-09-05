@@ -77,6 +77,44 @@ func TestNewPeerErrors(t *testing.T) {
 			}),
 		},
 		{
+			name: "add-path capability",
+			c: valid(func(c *PeerConfig) {
+				c.Capabilities = []Capability{
+					must(AddPathCapability(AddPathFamily{
+						Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast},
+						Send:   true,
+					})),
+				}
+			}),
+		},
+		{
+			name: "add-path family not prefix shaped",
+			c: valid(func(c *PeerConfig) {
+				c.AddPath = []AddPathFamily{{
+					Family: Family{AFI: AFIL2VPN, SAFI: SAFIEVPN},
+					Send:   true,
+				}}
+			}),
+		},
+		{
+			name: "add-path duplicate family",
+			c: valid(func(c *PeerConfig) {
+				f := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+				c.AddPath = []AddPathFamily{
+					{Family: f, Send: true},
+					{Family: f, Receive: true},
+				}
+			}),
+		},
+		{
+			name: "add-path no direction",
+			c: valid(func(c *PeerConfig) {
+				c.AddPath = []AddPathFamily{{
+					Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast},
+				}}
+			}),
+		},
+		{
 			name: "route refresh capability",
 			c: valid(func(c *PeerConfig) {
 				c.Capabilities = []Capability{{Code: CapabilityRouteRefresh}}
@@ -308,6 +346,108 @@ func TestPeerEstablished(t *testing.T) {
 
 		if d := diff(t, want, got); d != "" {
 			t.Fatalf("unexpected session (-want +got):\n%s", d)
+		}
+	})
+}
+
+// TestPeerAddPath drives the add-path extension (RFC 7911) end to end:
+// negotiation intersects the two OPENs per family and per direction into
+// Session.AddPath, and an inbound UPDATE on the established session parses
+// its path identifiers in both wire forms, the top level IPv4 unicast
+// fields and a multiprotocol attribute, with no caller-side decoding.
+func TestPeerAddPath(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+		v6u := Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+
+		updateC := make(chan *Update, 4)
+		r := newPipeRig(t, PeerConfig{
+			PeerASN:  64497,
+			Families: []Family{v4u, v6u},
+			AddPath: []AddPathFamily{
+				{Family: v4u, Send: true, Receive: true},
+				{Family: v6u, Receive: true},
+			},
+			OnUpdate: func(_ context.Context, _ *Peer, u *Update) error {
+				updateC <- u
+				return nil
+			},
+		})
+
+		s := r.acceptScript()
+
+		// The peer sends for both families but receives only IPv4
+		// unicast: the negotiated result is per family and per direction.
+		open := &Open{
+			ASN:      64497,
+			HoldTime: 90 * time.Second,
+			ID:       MustParseIdentifier("192.0.2.2"),
+			Capabilities: []Capability{
+				MultiprotocolCapability(v4u),
+				MultiprotocolCapability(v6u),
+				must(AddPathCapability(
+					AddPathFamily{Family: v4u, Send: true, Receive: true},
+					AddPathFamily{Family: v6u, Send: true},
+				)),
+			},
+		}
+
+		s.establish(open)
+
+		sess := recv(t, r.estC, "session establishment")
+		wantAddPath := []AddPathFamily{
+			{Family: v4u, Send: true, Receive: true},
+			{Family: v6u, Receive: true},
+		}
+		if d := diff(t, wantAddPath, sess.AddPath); d != "" {
+			t.Fatalf("unexpected negotiated add-path (-want +got):\n%s", d)
+		}
+
+		// The peer advertises two paths for one prefix in each wire form:
+		// the top level IPv4 unicast field, and an IPv6 multiprotocol
+		// attribute.
+		nlri := PathPrefixes{
+			{ID: 1, Prefix: netip.MustParsePrefix("2001:db8:1::/48")},
+			{ID: 2, Prefix: netip.MustParsePrefix("2001:db8:1::/48")},
+		}
+
+		mp, err := MarshalAttributes(MPReachNLRI{
+			Family:  v6u,
+			NextHop: netip.MustParseAddr("2001:db8::1"),
+			NLRI:    nlri,
+		})
+		if err != nil {
+			t.Fatalf("failed to marshal attributes: %v", err)
+		}
+
+		sent := &Update{
+			Attributes: mp,
+			NLRIPaths: PathPrefixes{
+				{ID: 1, Prefix: netip.MustParsePrefix("198.51.100.0/24")},
+				{ID: 2, Prefix: netip.MustParsePrefix("198.51.100.0/24")},
+			},
+		}
+
+		// The delivered MP_REACH_NLRI is marked add-path, because v6u is in
+		// the negotiated receive set: the want asserts the mark rather than
+		// leaving it uncompared.
+		sent.Attributes[0].addPath = true
+		s.write(sent)
+
+		got := recv(t, updateC, "update delivery")
+		if d := diff(t, sent, got); d != "" {
+			t.Fatalf("unexpected update (-want +got):\n%s", d)
+		}
+
+		mpr, ok, err := Lookup[MPReachNLRI](got.Attributes)
+		if err != nil || !ok {
+			t.Fatalf("failed to look up MP_REACH_NLRI: ok=%v, err=%v", ok, err)
+		}
+
+		if d := diff[NLRI](t, nlri, mpr.NLRI); d != "" {
+			t.Fatalf("unexpected MP_REACH_NLRI reachability (-want +got):\n%s", d)
 		}
 	})
 }

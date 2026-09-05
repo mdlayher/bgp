@@ -16,16 +16,20 @@ func (src *Update) Clone() *Update {
 	dst := new(Update)
 	*dst = *src
 	dst.Withdrawn = append(src.Withdrawn[:0:0], src.Withdrawn...)
+	dst.WithdrawnPaths = append(src.WithdrawnPaths[:0:0], src.WithdrawnPaths...)
 	dst.Attributes = src.Attributes.Clone()
 	dst.NLRI = append(src.NLRI[:0:0], src.NLRI...)
+	dst.NLRIPaths = append(src.NLRIPaths[:0:0], src.NLRIPaths...)
 	return dst
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _UpdateCloneNeedsRegeneration = Update(struct {
-	Withdrawn  []netip.Prefix
-	Attributes RawAttributes
-	NLRI       []netip.Prefix
+	Withdrawn      []netip.Prefix
+	WithdrawnPaths PathPrefixes
+	Attributes     RawAttributes
+	NLRI           []netip.Prefix
+	NLRIPaths      PathPrefixes
 }{})
 
 // Clone makes a deep copy of RawAttribute.
@@ -42,9 +46,10 @@ func (src *RawAttribute) Clone() *RawAttribute {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _RawAttributeCloneNeedsRegeneration = RawAttribute(struct {
-	Flags AttrFlags
-	Type  AttrType
-	Data  []byte
+	Flags   AttrFlags
+	Type    AttrType
+	addPath bool
+	Data    []byte
 }{})
 
 // Clone makes a deep copy of Open.

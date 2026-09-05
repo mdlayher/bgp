@@ -2,7 +2,9 @@ package bgp
 
 import (
 	"encoding/binary"
+	"errors"
 	"net/netip"
+	"slices"
 )
 
 // An Update is a BGP UPDATE message, used to advertise and withdraw routes,
@@ -16,6 +18,15 @@ type Update struct {
 	// Withdrawn lists IPv4 unicast prefixes to be removed from service.
 	Withdrawn []netip.Prefix
 
+	// WithdrawnPaths lists withdrawn IPv4 unicast prefixes with their
+	// path identifiers. It is Withdrawn's form on a session which
+	// negotiated the add-path extension (RFC 7911) for IPv4 unicast. At
+	// most one of the two may be set, and the plain and path forms also
+	// cannot mix across the Withdrawn and NLRI fields: one negotiation
+	// governs both. Which form a received UPDATE fills follows the
+	// session's negotiation; see [Session.AddPath].
+	WithdrawnPaths PathPrefixes
+
 	// Attributes lists the path attributes for NLRI, in raw binary form.
 	// Lookup fetches one attribute in typed form, RawAttributes.Parse decodes
 	// them all, and MarshalAttributes converts typed attributes back for
@@ -26,6 +37,11 @@ type Update struct {
 	// NLRI lists IPv4 unicast prefixes to be advertised: RFC 4271's
 	// Network Layer Reachability Information field.
 	NLRI []netip.Prefix
+
+	// NLRIPaths lists advertised IPv4 unicast prefixes with their path
+	// identifiers. It is NLRI's add-path form, exactly as WithdrawnPaths
+	// is Withdrawn's.
+	NLRIPaths PathPrefixes
 }
 
 func (*Update) messageType() MessageType { return MessageTypeUpdate }
@@ -40,7 +56,8 @@ func (*Update) messageType() MessageType { return MessageTypeUpdate }
 // family, the marker is an UPDATE whose only content is an MP_UNREACH_NLRI
 // attribute which withdraws nothing.
 func (u *Update) EndOfRIB() (Family, bool) {
-	if len(u.Withdrawn) != 0 || len(u.NLRI) != 0 {
+	if len(u.Withdrawn) != 0 || len(u.NLRI) != 0 ||
+		len(u.WithdrawnPaths) != 0 || len(u.NLRIPaths) != 0 {
 		return Family{}, false
 	}
 
@@ -86,12 +103,37 @@ func NewEndOfRIB(f Family) *Update {
 
 // AppendBinary implements encoding.BinaryAppender.
 func (u *Update) AppendBinary(b []byte) ([]byte, error) {
+	// The plain and add-path forms of each top level field are different
+	// wire encodings of the same field, so an UPDATE carrying both is
+	// ambiguous, not a longer list.
+	if len(u.Withdrawn) > 0 && len(u.WithdrawnPaths) > 0 {
+		return nil, errors.New("bgp: UPDATE cannot carry both Withdrawn and WithdrawnPaths")
+	}
+
+	if len(u.NLRI) > 0 && len(u.NLRIPaths) > 0 {
+		return nil, errors.New("bgp: UPDATE cannot carry both NLRI and NLRIPaths")
+	}
+
+	// One negotiation governs both top level fields, so their forms cannot
+	// mix across fields either: a receiver parses the whole message under
+	// a single encoding, and no negotiation parses a mixed one.
+	if (len(u.Withdrawn) > 0 || len(u.NLRI) > 0) &&
+		(len(u.WithdrawnPaths) > 0 || len(u.NLRIPaths) > 0) {
+		return nil, errors.New("bgp: UPDATE cannot mix plain and add-path forms of Withdrawn and NLRI")
+	}
+
 	b, off := appendHeader(b, MessageTypeUpdate)
 
-	// Withdrawn routes, prefixed by their 2 byte length.
+	// Withdrawn routes, prefixed by their 2 byte length. At most one of
+	// the two forms has content.
 	wOff := len(b)
 	b = append(b, 0, 0)
 	b, err := appendPrefixes(b, u.Withdrawn, AFIIPv4)
+	if err != nil {
+		return nil, err
+	}
+
+	b, err = appendPathPrefixes(b, u.WithdrawnPaths, AFIIPv4)
 	if err != nil {
 		return nil, err
 	}
@@ -116,11 +158,20 @@ func (u *Update) AppendBinary(b []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	b, err = appendPathPrefixes(b, u.NLRIPaths, AFIIPv4)
+	if err != nil {
+		return nil, err
+	}
+
 	return finishMessage(b, off)
 }
 
-// parseUpdate parses the body of an UPDATE message.
-func parseUpdate(b []byte) (*Update, error) {
+// parseUpdate parses the body of an UPDATE message. addPath is the session's
+// add-path receive set, the families whose inbound NLRI entries carry path
+// identifiers (RFC 7911): the top level fields of an IPv4 unicast entry
+// parse into the path fields, and the multiprotocol attribute of any entry
+// is marked so its typed parse decodes identifiers; see parseMessage.
+func parseUpdate(b []byte, addPath []Family) (*Update, error) {
 	if len(b) < 4 {
 		return nil, badLength(len(b), "UPDATE message too short: %d byte body", len(b))
 	}
@@ -136,8 +187,9 @@ func parseUpdate(b []byte) (*Update, error) {
 		err error
 	)
 
+	v4Paths := slices.Contains(addPath, Family{AFI: AFIIPv4, SAFI: SAFIUnicast})
 	if wLen > 0 {
-		u.Withdrawn, err = parsePrefixes(b[2:2+wLen], AFIIPv4, SubcodeInvalidNetworkField)
+		u.Withdrawn, u.WithdrawnPaths, err = parseTopLevelPrefixes(b[2:2+wLen], v4Paths)
 		if err != nil {
 			return nil, err
 		}
@@ -156,12 +208,27 @@ func parseUpdate(b []byte) (*Update, error) {
 		return nil, err
 	}
 
+	u.Attributes.markAddPath(addPath)
+
 	if nlri := b[2+aLen:]; len(nlri) > 0 {
-		u.NLRI, err = parsePrefixes(nlri, AFIIPv4, SubcodeInvalidNetworkField)
+		u.NLRI, u.NLRIPaths, err = parseTopLevelPrefixes(nlri, v4Paths)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	return &u, nil
+}
+
+// parseTopLevelPrefixes parses one top level UPDATE prefix field in the
+// form the session negotiated for IPv4 unicast: path prefixed when
+// addPath, plain otherwise. Exactly one returned slice is non-nil.
+func parseTopLevelPrefixes(b []byte, addPath bool) ([]netip.Prefix, PathPrefixes, error) {
+	if addPath {
+		ps, err := parsePathPrefixes(b, AFIIPv4, SubcodeInvalidNetworkField)
+		return nil, ps, err
+	}
+
+	ps, err := parsePrefixes(b, AFIIPv4, SubcodeInvalidNetworkField)
+	return ps, nil, err
 }

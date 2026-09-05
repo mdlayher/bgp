@@ -30,6 +30,7 @@ type NLRI interface {
 
 var (
 	_ NLRI = Prefixes(nil)
+	_ NLRI = PathPrefixes(nil)
 	_ NLRI = EVPNRoutes(nil)
 	_ NLRI = RawNLRI(nil)
 )
@@ -50,6 +51,37 @@ func (ps Prefixes) appendNLRI(b []byte, f Family) ([]byte, error) {
 	}
 
 	return appendPrefixes(b, ps, f.AFI)
+}
+
+// A PathPrefix is one add-path NLRI entry (RFC 7911): a prefix qualified by
+// a path identifier, so a session may carry multiple paths for the same
+// prefix at once.
+type PathPrefix struct {
+	// ID is the path identifier. It has meaning only in combination with
+	// Prefix, and only relative to the session the entry traveled on.
+	// Identifiers are assigned by the sending speaker and are compared
+	// for equality and nothing more. Zero is an ordinary identifier.
+	ID uint32
+
+	// Prefix is the IP network the entry advertises or withdraws.
+	Prefix netip.Prefix
+}
+
+// PathPrefixes is the NLRI of a prefix shaped address family on a session
+// which negotiated the add-path extension (RFC 7911) for it. Each entry
+// is a prefix qualified by a path identifier: Prefixes' add-path
+// counterpart. It appears wherever the negotiation requires: in a
+// multiprotocol attribute for a [Session.AddPath] family with the
+// matching direction, and in the [Update] NLRIPaths and WithdrawnPaths
+// fields for IPv4 unicast at the top level.
+type PathPrefixes []PathPrefix
+
+func (ps PathPrefixes) appendNLRI(b []byte, f Family) ([]byte, error) {
+	if !f.prefixShaped() {
+		return nil, fmt.Errorf("bgp: %s NLRI is not a list of prefixes", f)
+	}
+
+	return appendPathPrefixes(b, ps, f.AFI)
 }
 
 // An EVPNRouteType is the type of one EVPN NLRI record, as assigned by IANA.
@@ -162,8 +194,12 @@ func (r RawNLRI) appendNLRI(b []byte, _ Family) ([]byte, error) { return append(
 
 // parseNLRI parses the NLRI of family f from b, in the shape f's wire format
 // uses. An NLRI appears only inside a multiprotocol attribute, so a
-// malformation is always an Optional Attribute Error.
-func parseNLRI(b []byte, f Family) (NLRI, error) {
+// malformation is always an Optional Attribute Error. addPath reports that
+// the session negotiated the add-path extension for f in the receive
+// direction, so each entry carries a path identifier (RFC 7911); it is
+// only ever set for a prefix shaped family, the only shape add-path is
+// supported for.
+func parseNLRI(b []byte, f Family, addPath bool) (NLRI, error) {
 	// No reachability information at all is a nil NLRI whatever the family,
 	// so that nil is the one spelling of nothing in both directions: an
 	// End-of-RIB marker parses to a nil NLRI and marshals back from one,
@@ -173,6 +209,13 @@ func parseNLRI(b []byte, f Family) (NLRI, error) {
 	}
 
 	switch {
+	case f.prefixShaped() && addPath:
+		ps, err := parsePathPrefixes(b, f.AFI, SubcodeOptionalAttributeError)
+		if err != nil {
+			return nil, err
+		}
+
+		return ps, nil
 	case f.prefixShaped():
 		ps, err := parsePrefixes(b, f.AFI, SubcodeOptionalAttributeError)
 		if err != nil {

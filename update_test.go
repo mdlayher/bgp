@@ -126,6 +126,31 @@ func TestUpdateAppendBinaryErrors(t *testing.T) {
 			},
 		},
 		{
+			// The plain and add-path forms are two encodings of the same
+			// wire field, so carrying both is ambiguous.
+			name: "withdrawn both forms",
+			u: &Update{
+				Withdrawn:      []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+				WithdrawnPaths: PathPrefixes{{ID: 1, Prefix: netip.MustParsePrefix("192.0.2.0/24")}},
+			},
+		},
+		{
+			name: "NLRI both forms",
+			u: &Update{
+				NLRI:      []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+				NLRIPaths: PathPrefixes{{ID: 1, Prefix: netip.MustParsePrefix("192.0.2.0/24")}},
+			},
+		},
+		{
+			// One negotiation governs both top level fields, so a plain
+			// field and a path field cannot mix: no receiver parses both.
+			name: "mixed forms across fields",
+			u: &Update{
+				Withdrawn: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+				NLRIPaths: PathPrefixes{{ID: 1, Prefix: netip.MustParsePrefix("198.51.100.0/24")}},
+			},
+		},
+		{
 			name: "message too large",
 			u: &Update{
 				// 1200 /32 prefixes at 5 bytes each overflow MaxMessageSize.
@@ -149,6 +174,109 @@ func TestUpdateAppendBinaryErrors(t *testing.T) {
 			if _, err := tt.u.AppendBinary(nil); err == nil {
 				t.Fatal("expected an error, but none occurred")
 			}
+		})
+	}
+}
+
+// TestUpdateAddPathRoundTrip pins the two wire forms of RFC 7911 NLRI
+// through a full message round trip: the top level IPv4 unicast fields
+// parse into the path fields, and a marked multiprotocol attribute's typed
+// parse produces PathPrefixes, with no session context re-supplied by the
+// caller.
+func TestUpdateAddPathRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+	v6u := Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+
+	// Two paths for the same prefix in each form is the extension's whole
+	// point.
+	nlri := PathPrefixes{
+		{ID: 1, Prefix: netip.MustParsePrefix("2001:db8:1::/48")},
+		{ID: 2, Prefix: netip.MustParsePrefix("2001:db8:1::/48")},
+	}
+
+	mp, err := MarshalAttributes(MPReachNLRI{
+		Family:  v6u,
+		NextHop: netip.MustParseAddr("2001:db8::1"),
+		NLRI:    nlri,
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal attributes: %v", err)
+	}
+
+	// The parsed MP_REACH_NLRI is marked add-path, since v6u is in the
+	// receive set, so the want asserts the mark rather than ignoring it.
+	mp[0].addPath = true
+
+	u := &Update{
+		WithdrawnPaths: PathPrefixes{{ID: 7, Prefix: netip.MustParsePrefix("192.0.2.0/24")}},
+		Attributes:     mp,
+		NLRIPaths: PathPrefixes{
+			{ID: 1, Prefix: netip.MustParsePrefix("198.51.100.0/24")},
+			{ID: 2, Prefix: netip.MustParsePrefix("198.51.100.0/24")},
+		},
+	}
+
+	b, err := u.AppendBinary(nil)
+	if err != nil {
+		t.Fatalf("failed to marshal UPDATE: %v", err)
+	}
+
+	m, err := ParseMessageAddPath(b, []Family{v4u, v6u})
+	if err != nil {
+		t.Fatalf("failed to parse UPDATE: %v", err)
+	}
+
+	got := m.(*Update)
+	if d := diff(t, u, got); d != "" {
+		t.Fatalf("unexpected UPDATE (-want +got):\n%s", d)
+	}
+
+	// The mark carried by the parsed attribute decodes the identifiers
+	// without the caller re-supplying the negotiation.
+	mpr, ok, err := Lookup[MPReachNLRI](got.Attributes)
+	if err != nil || !ok {
+		t.Fatalf("failed to look up MP_REACH_NLRI: ok=%v, err=%v", ok, err)
+	}
+
+	if d := diff[NLRI](t, nlri, mpr.NLRI); d != "" {
+		t.Fatalf("unexpected MP_REACH_NLRI reachability (-want +got):\n%s", d)
+	}
+}
+
+// TestParseUpdateAddPathErrors covers a peer which negotiated add-path and
+// then sends malformed entries: the identifier and its prefix must both be
+// whole, and a malformation in the top level fields is an Invalid Network
+// Field like any other.
+func TestParseUpdateAddPathErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body []byte
+	}{
+		{
+			// Two bytes of withdrawn field cannot hold a four byte path
+			// identifier.
+			name: "withdrawn path identifier truncated",
+			body: []byte{0x00, 0x02, 0x00, 0x00, 0x00, 0x00},
+		},
+		{
+			name: "NLRI prefix truncated",
+			body: []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 24, 192},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := ParseMessageAddPath(
+				testMessage(MessageTypeUpdate, tt.body),
+				[]Family{{AFI: AFIIPv4, SAFI: SAFIUnicast}},
+			)
+			wantMessageError(t, err, NotificationUpdateMessageError, SubcodeInvalidNetworkField, nil)
 		})
 	}
 }
@@ -210,6 +338,14 @@ func TestUpdateEndOfRIB(t *testing.T) {
 			}}},
 			family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
 			ok:     true,
+		},
+		{
+			// An add-path session's empty-looking UPDATE is only a marker
+			// when the path fields are empty too.
+			name: "path fields carry content",
+			u: &Update{NLRIPaths: PathPrefixes{
+				{ID: 1, Prefix: netip.MustParsePrefix("192.0.2.0/24")},
+			}},
 		},
 		{
 			name: "MP unreach with withdrawn prefixes",

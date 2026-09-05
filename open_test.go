@@ -647,6 +647,84 @@ func TestCapabilityExtendedNextHop(t *testing.T) {
 	}
 }
 
+func TestAddPathCapability(t *testing.T) {
+	t.Parallel()
+
+	// One family per direction combination, so every send/receive wire
+	// value round trips.
+	fs := []AddPathFamily{
+		{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, Send: true, Receive: true},
+		{Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast}, Receive: true},
+		{Family: Family{AFI: AFIIPv6, SAFI: SAFIMulticast}, Send: true},
+	}
+
+	c, err := AddPathCapability(fs...)
+	if err != nil {
+		t.Fatalf("failed to create capability: %v", err)
+	}
+
+	want := []byte{
+		0x00, 0x01, 0x01, 0x03,
+		0x00, 0x02, 0x01, 0x01,
+		0x00, 0x02, 0x02, 0x02,
+	}
+	if d := diff(t, want, c.Data); d != "" {
+		t.Fatalf("unexpected capability data (-want +got):\n%s", d)
+	}
+
+	got, err := c.AddPath()
+	if err != nil {
+		t.Fatalf("failed to parse capability: %v", err)
+	}
+
+	if d := diff(t, fs, got); d != "" {
+		t.Fatalf("unexpected add-path families (-want +got):\n%s", d)
+	}
+}
+
+func TestAddPathCapabilityErrors(t *testing.T) {
+	t.Parallel()
+
+	// A family naming no direction has no wire value to encode.
+	if _, err := AddPathCapability(AddPathFamily{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}}); err == nil {
+		t.Fatal("expected an error, but none occurred")
+	}
+
+	tests := []struct {
+		name string
+		c    Capability
+	}{
+		{
+			name: "wrong code",
+			c:    Capability{Code: CapabilityRouteRefresh},
+		},
+		{
+			name: "truncated entry",
+			c:    Capability{Code: CapabilityAddPath, Data: []byte{0x00, 0x01, 0x01}},
+		},
+		{
+			name: "send/receive zero",
+			c:    Capability{Code: CapabilityAddPath, Data: []byte{0x00, 0x01, 0x01, 0x00}},
+		},
+		{
+			name: "send/receive out of range",
+			c:    Capability{Code: CapabilityAddPath, Data: []byte{0x00, 0x01, 0x01, 0x04}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := tt.c.AddPath(); err == nil {
+				t.Fatal("expected an error, but none occurred")
+			} else {
+				t.Logf("err: %v", err)
+			}
+		})
+	}
+}
+
 func TestFQDNCapability(t *testing.T) {
 	t.Parallel()
 

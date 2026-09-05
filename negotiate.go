@@ -2,6 +2,7 @@ package bgp
 
 import (
 	"encoding/binary"
+	"fmt"
 	"slices"
 )
 
@@ -33,6 +34,28 @@ func buildOpen(id Identity, restarting bool) (*Open, error) {
 		}
 
 		caps = append(caps, gc)
+	}
+
+	if len(id.AddPath) > 0 {
+		seen := make(map[Family]bool, len(id.AddPath))
+		for _, af := range id.AddPath {
+			if !af.Family.prefixShaped() {
+				return nil, fmt.Errorf("bgp: add-path is only supported for prefix shaped families, not %s", af.Family)
+			}
+
+			if seen[af.Family] {
+				return nil, fmt.Errorf("bgp: duplicate add-path family %s", af.Family)
+			}
+
+			seen[af.Family] = true
+		}
+
+		ac, err := AddPathCapability(id.AddPath...)
+		if err != nil {
+			return nil, err
+		}
+
+		caps = append(caps, ac)
 	}
 
 	caps = append(caps, id.Capabilities...)
@@ -127,8 +150,64 @@ func (f *FSM) negotiate(local, o *Open) (Session, *MessageError) {
 		RouteRefresh:    hasCapability(op.Capabilities, CapabilityRouteRefresh),
 		ExtendedNextHop: extendedNextHopFamilies(op.Capabilities),
 		GracefulRestart: gracefulRestart(op.Capabilities),
+		AddPath:         negotiatedAddPath(f.cfg.AddPath, fams, op.Capabilities),
 		HoldTime:        min(f.cfg.HoldTime, o.HoldTime),
 	}, nil
+}
+
+// negotiatedAddPath intersects the local add-path configuration with the
+// peer's add-path capability, per RFC 7911, section 5: this speaker may
+// send multiple paths for a family it advertised Send and the peer
+// advertised Receive, and will receive them for a family it advertised
+// Receive and the peer advertised Send. Only families in the negotiated
+// set count, in local configuration order. A malformed capability is
+// skipped, like a malformed multiprotocol capability, and the first entry
+// for a family wins, since RFC 7911 forbids duplicates.
+func negotiatedAddPath(ours []AddPathFamily, fams []Family, caps []Capability) []AddPathFamily {
+	if len(ours) == 0 {
+		return nil
+	}
+
+	peer := make(map[Family]AddPathFamily)
+	for _, c := range caps {
+		if c.Code != CapabilityAddPath {
+			continue
+		}
+
+		fs, err := c.AddPath()
+		if err != nil {
+			continue
+		}
+
+		for _, af := range fs {
+			if _, ok := peer[af.Family]; !ok {
+				peer[af.Family] = af
+			}
+		}
+	}
+
+	var out []AddPathFamily
+	for _, l := range ours {
+		if !slices.Contains(fams, l.Family) {
+			continue
+		}
+
+		p, ok := peer[l.Family]
+		if !ok {
+			continue
+		}
+
+		af := AddPathFamily{
+			Family:  l.Family,
+			Send:    l.Send && p.Receive,
+			Receive: l.Receive && p.Send,
+		}
+		if af.Send || af.Receive {
+			out = append(out, af)
+		}
+	}
+
+	return out
 }
 
 // gracefulRestart decodes the first well-formed graceful restart capability

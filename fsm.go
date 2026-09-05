@@ -113,6 +113,17 @@ type Identity struct {
 	// the FSM owns the encoding. Only the negotiation surface lives in
 	// this package; see [GracefulRestart] for what remains the caller's.
 	GracefulRestart *GracefulRestartConfig
+
+	// AddPath, if set, advertises the add-path capability (RFC 7911) for
+	// the listed families and directions. It must not also appear in
+	// Capabilities: negotiation needs the configured directions to
+	// produce [Session.AddPath], which reports what a session actually
+	// negotiated and governs both wire encodings. Only prefix shaped
+	// families are supported, and each entry must name at least one
+	// direction. Sending multiple paths remains the caller's RIB's. This
+	// package carries the negotiation and the path identifier wire forms:
+	// PathPrefixes and the Update path fields.
+	AddPath []AddPathFamily
 }
 
 // An FSMConfig configures an FSM. The embedded Identity's LocalASN and LocalID
@@ -412,6 +423,8 @@ func NewFSM(c FSMConfig) (*FSM, error) {
 			return nil, errors.New("bgp: the graceful restart capability is generated from GracefulRestart and must not be set")
 		case CapabilityRouteRefresh:
 			return nil, errors.New("bgp: the route refresh capability is generated from RouteRefresh and must not be set")
+		case CapabilityAddPath:
+			return nil, errors.New("bgp: the add-path capability is generated from AddPath and must not be set")
 		}
 	}
 
@@ -424,6 +437,7 @@ func NewFSM(c FSMConfig) (*FSM, error) {
 	c.Families = slices.Clone(c.Families)
 	c.Capabilities = slices.Clone(c.Capabilities)
 	c.GracefulRestart = c.GracefulRestart.Clone()
+	c.AddPath = slices.Clone(c.AddPath)
 
 	log := c.Logger
 	if log == nil {
