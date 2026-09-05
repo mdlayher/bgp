@@ -131,8 +131,8 @@ func testFRREstablish(t *testing.T, local, remote uint32, passive bool) {
 	// instance's pinned kernel hostname (see frrHostname): decoding
 	// it exercises the codec against a real implementation.
 	// Unknown-capability tolerance is still exercised for free by
-	// the other capabilities FRR sends
-	// (ADD-PATH, extended message, ...) which this package does not
+	// the other capabilities FRR sends (extended message, enhanced
+	// route refresh, paths limit, ...) which this package does not
 	// model.
 	fi := slices.IndexFunc(s.Peer.Capabilities, func(c bgp.Capability) bool { return c.Code == bgp.CapabilityFQDN })
 	if fi < 0 {

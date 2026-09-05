@@ -69,6 +69,18 @@ type frrNeighbor struct {
 	// TTLSecurity enables GTSM (RFC 5082) toward this neighbor with
 	// `ttl-security hops 1`: the directly connected case.
 	TTLSecurity bool
+
+	// AddPathTxAllPaths applies `addpath-tx-all-paths` toward this
+	// neighbor in both unicast families: FRR advertises add-path Send
+	// (RFC 7911) and sends every path it holds for a prefix, each with
+	// its own identifier. The template applies it to both families
+	// deliberately: FRR computes one Send flag per OPEN and advertises
+	// it for every activated family once any family has a TX mode
+	// configured (observed with 10.7.0), so a single family
+	// configuration would negotiate Send for both anyway. FRR
+	// advertises add-path Receive for every activated family by
+	// default, whatever this field says.
+	AddPathTxAllPaths bool
 }
 
 // An frr is a running FRR instance on the harness network.
@@ -143,9 +155,10 @@ type frrNeighborJSON struct {
 	LocalASN     uint32 `json:"localAs"`
 	HoldTimeMS   int    `json:"bgpTimerHoldTimeMsecs"`
 	Capabilities struct {
-		FourByteASN     string                     `json:"4byteAs"`
-		GracefulRestart string                     `json:"gracefulRestart"`
-		Multiprotocol   map[string]json.RawMessage `json:"multiprotocolExtensions"`
+		FourByteASN     string                       `json:"4byteAs"`
+		GracefulRestart string                       `json:"gracefulRestart"`
+		Multiprotocol   map[string]json.RawMessage   `json:"multiprotocolExtensions"`
+		AddPath         map[string]frrAddPathCapJSON `json:"addPath"`
 	} `json:"neighborCapabilities"`
 
 	// The last NOTIFICATION on the session, as FRR recorded it:
@@ -156,6 +169,17 @@ type frrNeighborJSON struct {
 	LastNotificationReason    string `json:"lastNotificationReason"`
 	LastNotificationHardReset bool   `json:"lastNotificationHardReset"`
 	LastShutdownDescription   string `json:"lastShutdownDescription"`
+}
+
+// An frrAddPathCapJSON is FRR's record of the add-path capability for
+// one family of a neighbor, split by direction and by which speaker
+// advertised it. FRR omits a direction's keys entirely when neither
+// speaker advertised it, which decodes as false.
+type frrAddPathCapJSON struct {
+	TxAdvertised bool `json:"txAdvertised"`
+	TxReceived   bool `json:"txReceived"`
+	RxAdvertised bool `json:"rxAdvertised"`
+	RxReceived   bool `json:"rxReceived"`
 }
 
 // neighbor fetches FRR's current view of the neighbor at addr.
@@ -236,6 +260,49 @@ func (f *frr) awaitRoute(t *testing.T, family string, prefix netip.Prefix) []frr
 	})
 
 	return out.Routes[prefix.String()]
+}
+
+// An frrPrefixPathJSON is the narrow slice of one path in `show bgp
+// <family> unicast <prefix> json` output the tests assert on: the per
+// prefix detail form, which unlike the table form carries communities
+// and the path's add-path identifiers.
+type frrPrefixPathJSON struct {
+	Valid bool `json:"valid"`
+
+	// AddPathRxID is the identifier the path arrived with, and
+	// AddPathTxID the one FRR sends it with toward neighbors
+	// configured with addpath-tx-all-paths.
+	AddPathRxID uint32 `json:"addpathRxId"`
+	AddPathTxID uint32 `json:"addpathTxIdAll"`
+
+	Community struct {
+		List []string `json:"list"`
+	} `json:"community"`
+	Nexthops []frrNexthopJSON `json:"nexthops"`
+}
+
+// awaitPrefixPaths polls until FRR's BGP table for family ("ipv4" or
+// "ipv6") holds exactly n paths for prefix, and returns them. FRR
+// answers the detail command for an absent prefix with an error rather
+// than JSON, which counts as zero paths.
+func (f *frr) awaitPrefixPaths(t *testing.T, family string, prefix netip.Prefix, n int) []frrPrefixPathJSON {
+	t.Helper()
+
+	var out struct {
+		Paths []frrPrefixPathJSON `json:"paths"`
+	}
+
+	cmd := fmt.Sprintf("show bgp %s unicast %s json", family, prefix)
+	f.poll(t, fmt.Sprintf("%s never held %d paths in the %s unicast table", prefix, n, family), func() bool {
+		out.Paths = nil
+		if err := f.vtysh(t, cmd, &out); err != nil {
+			return n == 0
+		}
+
+		return len(out.Paths) == n
+	})
+
+	return out.Paths
 }
 
 // poll invokes fn every 250ms until it reports true, failing t after a
