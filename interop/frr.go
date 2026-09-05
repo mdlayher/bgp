@@ -44,6 +44,17 @@ type frrConfig struct {
 	// the capability and sends End-of-RIB markers after its initial
 	// advertisements.
 	GracefulRestart bool
+
+	// ConfederationID, if nonzero, makes FRR a member of an AS
+	// confederation (RFC 5065): ASN is then its member AS and
+	// ConfederationID the confederation's public AS, which FRR speaks
+	// toward every neighbor outside the confederation. Neighbors whose
+	// ASN is listed in ConfederationPeers are fellow members: FRR
+	// speaks its member AS to them and their sessions carry
+	// AS_CONFED_SEQUENCE segments. FRR rejects an identifier equal to
+	// ASN.
+	ConfederationID    uint32
+	ConfederationPeers []uint32
 }
 
 // An frrNeighbor is one neighbor of an frrConfig.

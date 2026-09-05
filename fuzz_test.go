@@ -360,6 +360,11 @@ func FuzzRawAttributeParse(f *testing.F) {
 	seeds := []Attribute{
 		OriginIGP,
 		ASPath{{ASNs: []uint32{64496, 65536}}, {Set: true, ASNs: []uint32{64497}}},
+		ASPath{
+			{Confed: true, ASNs: []uint32{65001, 65003}},
+			{Set: true, Confed: true, ASNs: []uint32{65004}},
+			{ASNs: []uint32{64496}},
+		},
 		NextHop(netip.MustParseAddr("192.0.2.1")),
 		MED(100),
 		LocalPref(200),

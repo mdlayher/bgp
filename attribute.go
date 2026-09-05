@@ -569,11 +569,22 @@ func (o Origin) appendData(b []byte) ([]byte, error) {
 // supported by this package.
 type ASPath []ASSegment
 
-// An ASSegment is a single segment of an ASPath.
+// An ASSegment is a single segment of an ASPath. Set and Confed select
+// among the four wire segment types: the zero value is an ordered
+// AS_SEQUENCE.
 type ASSegment struct {
-	// Set indicates that the segment is an unordered AS_SET, rather than an
-	// ordered AS_SEQUENCE.
+	// Set indicates that the segment is unordered: an AS_SET, or an
+	// AS_CONFED_SET when Confed is also true.
 	Set bool
+
+	// Confed indicates that the segment is a confederation segment per RFC
+	// 5065: an AS_CONFED_SEQUENCE, or an AS_CONFED_SET when Set is also
+	// true. Confederation segments are exchanged only within a
+	// confederation, and this package only carries them. Their section 5.3
+	// semantics are the caller's RIB's: a best-path AS_PATH length excludes
+	// confederation segments, the MED neighbor AS skips them, and
+	// confederation loop detection examines them.
+	Confed bool
 
 	// ASNs lists the autonomous systems within the segment.
 	ASNs []uint32
@@ -583,45 +594,55 @@ type ASSegment struct {
 // per RFC 6811, section 2, for route origin validation. Exactly one of the
 // three readings applies: ASN names the origin; Set reports that the path
 // ends in an AS_SET, whose origin is RFC 6811's "NONE" and matches no
-// authorization; Empty reports a path with no autonomous system at all,
-// whose origin is the receiving speaker's own AS, which the path cannot
-// know.
+// authorization; Empty reports a path which names no origin at all, one
+// with no autonomous system outside confederation segments, whose origin
+// is the receiving speaker's own AS or confederation, which the path
+// cannot know.
 type OriginAS struct {
 	// ASN is the rightmost autonomous system of the path's final
 	// AS_SEQUENCE, or zero when Set or Empty.
 	ASN uint32
 
-	// Set reports that the path's final segment is an AS_SET.
+	// Set reports that the path's final non-confederation segment is an
+	// AS_SET.
 	Set bool
 
-	// Empty reports a path with no autonomous system at all.
+	// Empty reports a path with no autonomous system outside
+	// confederation segments.
 	Empty bool
 }
 
 // Origin returns the origin autonomous system the path names, per RFC 6811,
-// section 2. Validation of the origin against RPKI data is the caller's;
-// see [ValidationState] for carrying its result.
+// section 2. Confederation segments never name an origin: they are the
+// path's intra-confederation record, so they are skipped, and a path of
+// only confederation segments reads Empty, since it originated within the
+// local confederation. Validation of the origin against RPKI data is the
+// caller's; see [ValidationState] for carrying its result.
 func (p ASPath) Origin() OriginAS {
-	if len(p) == 0 {
-		return OriginAS{Empty: true}
+	for _, last := range slices.Backward(p) {
+		switch {
+		case last.Confed:
+			continue
+		case last.Set:
+			return OriginAS{Set: true}
+		case len(last.ASNs) == 0:
+			// Not encodable, but representable: nothing names an origin.
+			return OriginAS{Empty: true}
+		default:
+			return OriginAS{ASN: last.ASNs[len(last.ASNs)-1]}
+		}
 	}
 
-	last := p[len(p)-1]
-	switch {
-	case last.Set:
-		return OriginAS{Set: true}
-	case len(last.ASNs) == 0:
-		// Not encodable, but representable: nothing names an origin.
-		return OriginAS{Empty: true}
-	default:
-		return OriginAS{ASN: last.ASNs[len(last.ASNs)-1]}
-	}
+	return OriginAS{Empty: true}
 }
 
-// Wire values for AS path segment types.
+// Wire values for AS path segment types. The confederation types are RFC
+// 5065, section 3.
 const (
-	asSet      = 1
-	asSequence = 2
+	asSet            = 1
+	asSequence       = 2
+	asConfedSequence = 3
+	asConfedSet      = 4
 )
 
 func (ASPath) attrType() AttrType   { return AttrASPath }
@@ -633,18 +654,23 @@ func (p ASPath) appendData(b []byte) ([]byte, error) {
 			return nil, errors.New("bgp: AS path segment must contain at least 1 ASN")
 		}
 
-		// An AS_SET is unordered and cannot be split without changing its
-		// meaning.
+		// An AS_SET or AS_CONFED_SET is unordered and cannot be split
+		// without changing its meaning.
 		if s.Set && len(s.ASNs) > math.MaxUint8 {
-			return nil, fmt.Errorf("bgp: AS_SET segment must contain between 1 and 255 ASNs: %d", len(s.ASNs))
+			return nil, fmt.Errorf("bgp: AS set segment must contain between 1 and 255 ASNs: %d", len(s.ASNs))
 		}
 
 		typ := byte(asSequence)
-		if s.Set {
+		switch {
+		case s.Set && s.Confed:
+			typ = asConfedSet
+		case s.Set:
 			typ = asSet
+		case s.Confed:
+			typ = asConfedSequence
 		}
 
-		// A wire segment holds at most 255 ASNs; a longer AS_SEQUENCE is
+		// A wire segment holds at most 255 ASNs; a longer sequence is
 		// encoded as multiple segments, per RFC 4271, section 4.3.
 		for asns := s.ASNs; len(asns) > 0; {
 			n := min(len(asns), math.MaxUint8)
@@ -671,11 +697,15 @@ func parseASPath(b []byte) (ASPath, error) {
 
 		typ, n := b[0], int(b[1])
 
-		var set bool
+		var set, confed bool
 		switch typ {
 		case asSet:
 			set = true
 		case asSequence:
+		case asConfedSequence:
+			confed = true
+		case asConfedSet:
+			set, confed = true, true
 		default:
 			return nil, updateError(SubcodeMalformedASPath, nil,
 				"unsupported AS_PATH segment type %d", typ)
@@ -697,7 +727,7 @@ func parseASPath(b []byte) (ASPath, error) {
 			asns = append(asns, binary.BigEndian.Uint32(b[4*i:]))
 		}
 
-		p = append(p, ASSegment{Set: set, ASNs: asns})
+		p = append(p, ASSegment{Set: set, Confed: confed, ASNs: asns})
 		b = b[4*n:]
 	}
 

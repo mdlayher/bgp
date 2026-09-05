@@ -34,6 +34,7 @@ planned, or explicitly rejected.
 | 4724 | Graceful restart | Done 2026-08-17, negotiation surface only: capability codec, Identity.GracefulRestart with per-attempt Restart State via Restarting, Session.GracefulRestart, NewEndOfRIB/Update.EndOfRIB. Helper behavior is permanently the caller's RIB's: stale retention, the restart timer, and the End-of-RIB sweep. Restarting-speaker R/F bits are caller-asserted |
 | 8538 | GR notification support / Hard Reset | Done 2026-08-17 at the wire: the N bit is encoded and SubcodeCeaseHardReset is named, so a helper can honor both; retention policy is the caller's. A handler can send Hard Reset via *MessageError today; a shutdown-path knob for it is deferred until demanded |
 | 7911 | Add-path | Done 2026-09-02, demanded by bgpdev, in the shape parked 2026-08-16: PathPrefixes of {ID, Prefix} as one more NLRI implementation. Capability codec (AddPathCapability, code 69), Identity.AddPath advertisement, per-family per-direction negotiation into Session.AddPath, Update.NLRIPaths/WithdrawnPaths for the top level fields, and session-aware receive parsing: the FSM publishes the negotiated receive set on its Conn, so handler-delivered NLRI arrives typed while bare ParseMessage stays stateless and never decodes path IDs; ParseMessageAddPath is the entry for an out-of-Conn consumer which knows the negotiation, such as a BMP station (demanded by bmp, 2026-09-02). Prefix shaped families only; path selection and identifier assignment are the caller's RIB's |
+| 5065 | AS confederations | Done 2026-09-05 as the follow-up to the add-path commit, wire surface only, demanded by live confed interop (segment type 3 previously reset the session as Malformed AS_PATH): ASSegment.Confed round-trips AS_CONFED_SEQUENCE and AS_CONFED_SET, and ASPath.Origin skips confederation segments. The section 5.3 semantics stay the caller's RIB's: AS_PATH length exclusion, the MED neighbor AS, and confederation loop detection |
 
 ## Planned
 
@@ -55,7 +56,6 @@ planned, or explicitly rejected.
 | 6396 | MRT | Not a wire feature of this module: a BGP4MP writer is a sibling module built on OnMessage (every message, both directions, with endpoints) and OnStateChange (State numbered as MRT numbers it). `internal/mrt` reads BGP4MP for the test corpus only |
 | 9384 | BFD Down (Cease subcode 10) | Named (SubcodeCeaseBFDDown) and consumable via ResetSession (2026-08-26): a BFD-driven caller sends it plain or wrapped in a Hard Reset. BFD itself (RFC 5880/5881) stays outside this module; a future implementation is its own context |
 | 2842-style dynamic capabilities | Capability renegotiation | FSM deliberate cut |
-| 5065 | AS confederations | Confederation segment types rejected on parse |
 | 6472 | AS_SET deprecation (BCP) | Followed in spirit: AS_SET marshals but never auto-splits |
 
 ## Explicitly never

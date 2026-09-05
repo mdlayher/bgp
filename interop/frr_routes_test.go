@@ -328,7 +328,8 @@ type route struct {
 	Prefix    netip.Prefix
 	Family    bgp.Family
 	Origin    bgp.Origin
-	ASPath    []uint32 // flattened AS_SEQUENCE ASNs
+	Path      bgp.ASPath // every segment as parsed
+	ASPath    []uint32   // flattened AS_SEQUENCE ASNs
 	NextHop   netip.Addr
 	LinkLocal netip.Addr
 }
@@ -355,8 +356,10 @@ func collectRoutes() (func(context.Context, *bgp.Peer, *bgp.Update) error, <-cha
 				shared.Origin = a
 			case bgp.ASPath:
 				for _, seg := range a {
-					if !seg.Set {
-						shared.ASPath = append(shared.ASPath, slices.Clone(seg.ASNs)...)
+					seg.ASNs = slices.Clone(seg.ASNs)
+					shared.Path = append(shared.Path, seg)
+					if !seg.Set && !seg.Confed {
+						shared.ASPath = append(shared.ASPath, seg.ASNs...)
 					}
 				}
 			case bgp.NextHop:

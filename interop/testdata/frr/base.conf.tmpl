@@ -21,6 +21,12 @@ router bgp {{.ASN}}
 {{- if .GracefulRestart}}
  bgp graceful-restart
 {{- end}}
+{{- if .ConfederationID}}
+ bgp confederation identifier {{.ConfederationID}}
+{{- range .ConfederationPeers}}
+ bgp confederation peers {{.}}
+{{- end}}
+{{- end}}
 {{- range .Neighbors}}
  neighbor {{.Addr}} remote-as {{.ASN}}
  neighbor {{.Addr}} timers connect 5

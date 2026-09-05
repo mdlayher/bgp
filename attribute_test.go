@@ -450,6 +450,54 @@ func TestASPathLongSequenceSplits(t *testing.T) {
 	}
 }
 
+// TestASPathConfederationSegments pins RFC 5065 support at the wire: the
+// confederation segment types a confederation member sends must round trip
+// rather than reset the session as malformed.
+func TestASPathConfederationSegments(t *testing.T) {
+	t.Parallel()
+
+	// A path inside confederation eBGP: the members' record, an unordered
+	// confederation set from aggregation, then the external path from
+	// before the route entered the confederation.
+	path := ASPath{
+		{Confed: true, ASNs: []uint32{65001, 65003}},
+		{Set: true, Confed: true, ASNs: []uint32{65004}},
+		{ASNs: []uint32{64496}},
+	}
+
+	ras, err := MarshalAttributes(path)
+	if err != nil {
+		t.Fatalf("failed to marshal attributes: %v", err)
+	}
+
+	attr, err := ras[0].Parse()
+	if err != nil {
+		t.Fatalf("failed to parse attribute: %v", err)
+	}
+
+	if d := diff[Attribute](t, path, attr); d != "" {
+		t.Fatalf("unexpected AS path (-want +got):\n%s", d)
+	}
+
+	// The exact AS_PATH a live FRR confederation member sent in its first
+	// UPDATE: an AS_CONFED_SEQUENCE of the single member-AS 65001. This
+	// attribute reset sessions when segment type 3 was rejected.
+	frr := RawAttribute{
+		Type: AttrASPath,
+		Data: []byte{0x03, 0x01, 0x00, 0x00, 0xfd, 0xe9},
+	}
+
+	got, err := frr.Parse()
+	if err != nil {
+		t.Fatalf("failed to parse attribute: %v", err)
+	}
+
+	want := ASPath{{Confed: true, ASNs: []uint32{65001}}}
+	if d := diff[Attribute](t, want, got); d != "" {
+		t.Fatalf("unexpected AS path (-want +got):\n%s", d)
+	}
+}
+
 func TestASPathSegmentErrors(t *testing.T) {
 	t.Parallel()
 
@@ -504,7 +552,7 @@ func TestRawAttributeParseErrors(t *testing.T) {
 		},
 		{
 			name:    "AS path segment type",
-			a:       RawAttribute{Type: AttrASPath, Data: []byte{0x03, 0x01, 0, 0, 0xfb, 0xf0}},
+			a:       RawAttribute{Type: AttrASPath, Data: []byte{0x05, 0x01, 0, 0, 0xfb, 0xf0}},
 			subcode: SubcodeMalformedASPath,
 		},
 		{
@@ -1018,6 +1066,21 @@ func TestASPathOrigin(t *testing.T) {
 			name: "empty final segment",
 			p:    ASPath{{ASNs: []uint32{64496}}, {}},
 			want: OriginAS{Empty: true},
+		},
+		{
+			// A route originated within the local confederation carries
+			// only confederation segments, which never name an origin.
+			name: "confederation only",
+			p:    ASPath{{Confed: true, ASNs: []uint32{65001}}},
+			want: OriginAS{Empty: true},
+		},
+		{
+			// A route learned outside the confederation and carried within
+			// it: the confederation record precedes the external path,
+			// whose rightmost AS remains the origin.
+			name: "confederation then sequence",
+			p:    ASPath{{Confed: true, ASNs: []uint32{65001}}, {ASNs: []uint32{64496}}},
+			want: OriginAS{ASN: 64496},
 		},
 	}
 
