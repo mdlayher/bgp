@@ -781,15 +781,38 @@ func TestRawAttributeParseErrors(t *testing.T) {
 func TestRawAttributeParseUnknownType(t *testing.T) {
 	t.Parallel()
 
-	// An unknown attribute type is not a protocol error: no NOTIFICATION
-	// must be sent in response, so the error is not a MessageError.
-	_, err := (RawAttribute{Type: AttrType(255)}).Parse()
+	// AIGP (RFC 7311) is a real attribute this package does not model. An
+	// unknown attribute type is not a protocol error: no NOTIFICATION must
+	// be sent in response, so the error wraps ErrUnknownAttribute rather
+	// than being a MessageError, and a caller keeps the attribute raw.
+	aigp := RawAttribute{
+		Flags: AttrFlagOptional,
+		Type:  AttrType(26),
+		Data:  []byte{1, 0, 11, 0, 0, 0, 0, 0, 0, 0, 10},
+	}
+
+	_, err := aigp.Parse()
 	if err == nil {
 		t.Fatal("expected an error, but none occurred")
 	}
 
+	if !errors.Is(err, ErrUnknownAttribute) {
+		t.Fatalf("expected ErrUnknownAttribute, but got: %v", err)
+	}
+
 	if merr, ok := errors.AsType[*MessageError](err); ok {
 		t.Fatalf("expected a plain error, but got: %v", merr)
+	}
+
+	// A malformed attribute of a known type is a protocol error, and must
+	// not be mistaken for an unknown one.
+	_, err = (RawAttribute{Type: AttrOrigin, Data: []byte{1, 2}}).Parse()
+	if errors.Is(err, ErrUnknownAttribute) {
+		t.Fatalf("malformed known attribute matched ErrUnknownAttribute: %v", err)
+	}
+
+	if _, ok := errors.AsType[*MessageError](err); !ok {
+		t.Fatalf("expected a MessageError, but got: %v", err)
 	}
 }
 

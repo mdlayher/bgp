@@ -78,9 +78,11 @@ type RawAttribute struct {
 //
 // A malformed attribute of a known type produces a *MessageError which
 // carries the erroneous attribute as its diagnostic data, per RFC 4271,
-// section 6.3. An attribute of an unknown type produces a plain error: it is
-// not a protocol error, and RFC 4271 requires unrecognized optional
-// transitive attributes be passed along unmodified.
+// section 6.3. An attribute of an unknown type produces an error wrapping
+// [ErrUnknownAttribute], never a *MessageError: it is not a protocol error,
+// and RFC 4271 requires unrecognized optional transitive attributes be passed
+// along unmodified. A caller which must distinguish the two tests the error
+// with errors.Is, and the RawAttribute itself remains usable in raw form.
 func (a RawAttribute) Parse() (Attribute, error) {
 	attr, err := a.parse()
 	if merr, ok := errors.AsType[*MessageError](err); ok && merr.Data == nil {
@@ -234,14 +236,16 @@ func (a RawAttribute) parse() (Attribute, error) {
 
 		return OTC(binary.BigEndian.Uint32(a.Data)), nil
 	default:
-		return nil, fmt.Errorf("%w %d", errUnknownAttribute, uint8(a.Type))
+		return nil, fmt.Errorf("%w %d", ErrUnknownAttribute, uint8(a.Type))
 	}
 }
 
-// errUnknownAttribute is the error RawAttribute.Parse wraps for an attribute
+// ErrUnknownAttribute is the error RawAttribute.Parse wraps for an attribute
 // of a type this package does not interpret. It is a plain error, not a
-// *MessageError: an unrecognized attribute is not a protocol error.
-var errUnknownAttribute = errors.New("bgp: cannot parse attribute of unknown type")
+// *MessageError: an unrecognized attribute is not a protocol error, and a
+// caller tests for it with errors.Is to pass the attribute along in raw form
+// rather than treat it as malformed.
+var ErrUnknownAttribute = errors.New("bgp: cannot parse attribute of unknown type")
 
 // mpFamily returns the address family a multiprotocol attribute names in
 // its first three data bytes. It returns false for an attribute of any
@@ -311,7 +315,9 @@ func (as RawAttributes) Find(t AttrType) (RawAttribute, bool) {
 // section 5 requires of unrecognized optional transitive attributes.
 //
 // A malformed attribute of a known type fails the whole parse with its
-// *MessageError; see [RawAttribute.Parse]. Typed values never reference the
+// *MessageError; see [RawAttribute.Parse]. The [ErrUnknownAttribute] error
+// the single-attribute Parse returns is absorbed here: it is the signal to
+// keep the attribute raw, not a failure. Typed values never reference the
 // raw list's Data, but a RawAttribute returned as-is does, so a caller
 // retaining the result past the lifetime of the buffer the list references
 // clones the list first.
@@ -324,7 +330,7 @@ func (as RawAttributes) Parse() ([]Attribute, error) {
 	for _, a := range as {
 		attr, err := a.Parse()
 		switch {
-		case errors.Is(err, errUnknownAttribute):
+		case errors.Is(err, ErrUnknownAttribute):
 			attr = a
 		case err != nil:
 			return nil, err
