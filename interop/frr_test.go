@@ -101,12 +101,7 @@ func testFRREstablish(t *testing.T, local, remote uint32, passive bool) {
 		_, estab = runPeer(t, netip.AddrPortFrom(f.Addr, bgp.Port), cfg)
 	}
 
-	var s bgp.Session
-	select {
-	case s = <-estab:
-	case <-time.After(60 * time.Second):
-		t.Fatal("timed out waiting for session establishment")
-	}
+	s := awaitSession(t, estab)
 
 	// Our view of FRR.
 	if got, want := s.Peer.ASN, remote; got != want {
@@ -198,6 +193,10 @@ func runPeerCause(t *testing.T, raddr netip.AddrPort, cfg bgp.PeerConfig) (*bgp.
 		return nil
 	}
 
+	if cfg.Logger == nil {
+		cfg.Logger = speakerLog(t)
+	}
+
 	cfg.Dialer.Port = raddr.Port()
 	p, err := bgp.NewPeer(raddr.Addr(), cfg)
 	if err != nil {
@@ -239,6 +238,10 @@ func runServer(t *testing.T, raddr netip.AddrPort, cfg bgp.PeerConfig, lc bgp.Li
 		}
 
 		return nil
+	}
+
+	if cfg.Logger == nil {
+		cfg.Logger = speakerLog(t)
 	}
 
 	l, err := lc.Listen(context.Background(), wildcardV4)

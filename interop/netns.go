@@ -287,6 +287,21 @@ func (n *nsRuntime) startFRR(t *testing.T, name string, conf []byte) *nsFRR {
 	plen4 := strconv.Itoa(netip.MustParsePrefix(netV4).Bits())
 	plen6 := strconv.Itoa(netip.MustParsePrefix(netV6).Bits())
 	ipCmd("link", "add", vethHost, "type", "veth", "peer", "name", vethFRR)
+
+	// The harness network is statically addressed, so this side must
+	// not autoconfigure. zebra advertises the prefix on the instance's
+	// end of the pair, and a global address derived from that
+	// advertisement outranks the static one as the source for
+	// connections to the router (RFC 6724, rule 5.5: prefer an address
+	// whose prefix the selected next hop advertised). The router then
+	// rejects those connections, since its neighbor statement names
+	// the static address. The knob is set while the link is still
+	// down, before any advertisement can arrive, and its path names an
+	// interface which exists only in this namespace.
+	if err := os.WriteFile(filepath.Join("/proc/sys/net/ipv6/conf", vethHost, "accept_ra"), []byte("0\n"), 0o644); err != nil {
+		t.Fatalf("failed to disable IPv6 router advertisements on %s: %v", vethHost, err)
+	}
+
 	ipCmd("addr", "add", hostV4+"/"+plen4, "dev", vethHost)
 	ipCmd("-6", "addr", "add", hostV6+"/"+plen6, "dev", vethHost, "nodad")
 	ipCmd("link", "set", vethHost, "up")
@@ -298,7 +313,7 @@ func (n *nsRuntime) startFRR(t *testing.T, name string, conf []byte) *nsFRR {
 	// they bind asynchronously after starting. Polling an external
 	// process is the documented exception to the repo's no-sleep
 	// rule: see frr.poll.
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(settleTimeout)
 	for {
 		_, zerr := os.Stat(filepath.Join(run, "zebra.vty"))
 		_, berr := os.Stat(filepath.Join(run, "bgpd.vty"))
@@ -342,8 +357,7 @@ func (f *nsFRR) vtysh(cmds ...string) ([]byte, error) {
 
 	out, err := exec.Command(f.r.vtysh, args...).Output()
 	if err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
+		if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 			out = append(out, exit.Stderr...)
 		}
 	}

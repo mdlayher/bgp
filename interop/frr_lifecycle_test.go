@@ -233,7 +233,7 @@ func TestFRRGracefulRestart(t *testing.T) {
 
 	// FRR marks the end of its initial table per negotiated family.
 	got := make(map[bgp.Family]bool)
-	timeout := time.After(60 * time.Second)
+	timeout := time.After(settleTimeout)
 	for len(got) < 2 {
 		select {
 		case family := <-eors:
@@ -301,7 +301,7 @@ func TestFRRRouteRefresh(t *testing.T) {
 		if family != v4Unicast {
 			t.Errorf("unexpected refreshed family: got %v, want %v", family, v4Unicast)
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(settleTimeout):
 		t.Fatal("timed out waiting for FRR's route refresh request")
 	}
 }
@@ -327,7 +327,7 @@ func collectCloses(cfg *bgp.PeerConfig) <-chan bgp.Close {
 func awaitClose(t *testing.T, closes <-chan bgp.Close) bgp.Close {
 	t.Helper()
 
-	timeout := time.After(60 * time.Second)
+	timeout := time.After(settleTimeout)
 	for {
 		select {
 		case c := <-closes:

@@ -403,7 +403,7 @@ func collectRoutes() (func(context.Context, *bgp.Peer, *bgp.Update) error, <-cha
 func awaitRoute(t *testing.T, routes <-chan route, prefix netip.Prefix) route {
 	t.Helper()
 
-	timeout := time.After(60 * time.Second)
+	timeout := time.After(settleTimeout)
 	for {
 		select {
 		case r := <-routes:
@@ -424,7 +424,7 @@ func awaitSession(t *testing.T, estab <-chan bgp.Session) bgp.Session {
 	select {
 	case s := <-estab:
 		return s
-	case <-time.After(60 * time.Second):
+	case <-time.After(establishTimeout):
 		t.Fatal("timed out waiting for session establishment")
 		panic("unreachable")
 	}

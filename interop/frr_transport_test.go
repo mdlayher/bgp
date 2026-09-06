@@ -179,8 +179,8 @@ func TestFRRGTSMViolation(t *testing.T) {
 // awaitNoSession asserts no session establishes within a bounded
 // window: the assertion for deliberately broken transport, where the
 // kernel drops segments silently and success would otherwise appear
-// well inside the window (FRR retries every 5 seconds and our own
-// dial retries are faster).
+// well inside the window, since FRR retries every 5 seconds and a
+// working session comes up on its first attempt.
 func awaitNoSession(t *testing.T, estab <-chan bgp.Session) {
 	t.Helper()
 

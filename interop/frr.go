@@ -106,7 +106,9 @@ type frr struct {
 }
 
 // startFRR renders cfg and starts an FRR instance running it, torn
-// down when t ends. It returns once bgpd is answering vtysh.
+// down when t ends. It returns once bgpd is answering vtysh and every
+// configured neighbor's state machine has started, which is when the
+// instance is ready to peer.
 func startFRR(t *testing.T, cfg frrConfig) *frr {
 	t.Helper()
 
@@ -132,6 +134,21 @@ func startFRR(t *testing.T, cfg frrConfig) *frr {
 		var v map[string]any
 		return f.vtysh(t, "show bgp summary json", &v) == nil
 	})
+
+	// bgpd answering is not bgpd being ready to peer: it refuses
+	// incoming connections for seconds after reading its configuration
+	// ("connection rejected ... due to configuration being currently
+	// read in", then "released from config-pending hold", observed
+	// with 10.7.0), and resets neighbors as the statements land. A
+	// speaker which dials inside that window is refused, so wait for
+	// every configured neighbor's own state machine to start: leaving
+	// Idle is FRR reporting that the hold is over.
+	for _, n := range cfg.Neighbors {
+		f.poll(t, fmt.Sprintf("neighbor %s never left Idle", n.Addr), func() bool {
+			nb, err := f.neighbor(t, n.Addr)
+			return err == nil && nb.BGPState != "" && nb.BGPState != "Idle"
+		})
+	}
 
 	return f
 }
@@ -324,7 +341,7 @@ func (f *frr) awaitPrefixPaths(t *testing.T, family string, prefix netip.Prefix,
 func (f *frr) poll(t *testing.T, msg string, fn func() bool) {
 	t.Helper()
 
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(settleTimeout)
 	for !fn() {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out polling %s: %s", f.name, msg)

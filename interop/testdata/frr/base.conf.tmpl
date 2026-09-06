@@ -10,9 +10,18 @@
 !   hold time asserted by tests is therefore 9 seconds.
 ! - "timers connect 5" keeps FRR's active open prompt when it dials a
 !   passive library speaker (the default retry is 120 seconds).
+! - "debug bgp neighbor-events" makes FRR name its own reason for
+!   refusing or dropping a session. At default verbosity bgpd logs
+!   nothing between reading its configuration and Established, so the
+!   router's side of a session which never comes up is mute, and the
+!   harness has only its own speaker to go on. The per-packet debugs
+!   are deliberately not enabled: neighbor events are a handful of
+!   lines per session, and the logs surface only on failure or under
+!   $BGP_INTEROP_LOGDIR.
 frr defaults traditional
 hostname frr-interop
 log stdout
+debug bgp neighbor-events
 !
 router bgp {{.ASN}}
  bgp router-id {{.RouterID}}

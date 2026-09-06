@@ -399,7 +399,7 @@ func (c *pathCollector) handler(_ context.Context, _ *bgp.Peer, u *bgp.Update) e
 func (c *pathCollector) await(t *testing.T, prefix netip.Prefix, withdrawn bool) path {
 	t.Helper()
 
-	timeout := time.After(60 * time.Second)
+	timeout := time.After(settleTimeout)
 	for {
 		select {
 		case p := <-c.paths:
@@ -417,7 +417,7 @@ func (c *pathCollector) await(t *testing.T, prefix netip.Prefix, withdrawn bool)
 func (c *pathCollector) awaitEndOfRIB(t *testing.T, fam bgp.Family) {
 	t.Helper()
 
-	timeout := time.After(60 * time.Second)
+	timeout := time.After(settleTimeout)
 	for {
 		select {
 		case got := <-c.endOfRIB:

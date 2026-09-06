@@ -55,7 +55,12 @@ jobs:
           # teardown, so a failure's diagnostics survive as an
           # artifact.
           BGP_INTEROP_LOGDIR: ${{ runner.temp }}/interop-logs
-        run: nix develop --command go test -tags interop -race -v ./interop
+        # The suite's establishment waits are longer than go test's
+        # default 10 minute package timeout would tolerate if several
+        # of them ever fired in one run: see establishTimeout. The
+        # ceiling still has to catch a genuine hang, so it is generous
+        # rather than absent.
+        run: nix develop --command go test -tags interop -race -timeout 20m -v ./interop
 
       - name: Upload router logs
         if: failure()
