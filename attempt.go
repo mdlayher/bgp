@@ -66,12 +66,23 @@ type attempt struct {
 	state State
 }
 
-// ceaseCollisionResolution is the NOTIFICATION a collision's loser is sent.
-// It is shared and must not be mutated.
-var ceaseCollisionResolution = &Notification{
-	Code:    NotificationCease,
-	Subcode: SubcodeCeaseConnectionCollisionResolution,
-}
+// The two Cease NOTIFICATIONs which refuse a connection, per RFC 4486:
+// ceaseCollisionResolution for a connection closed by the collision procedure
+// of RFC 4271, section 6.8, which includes every connection refused because a
+// session is already established, and ceaseConnectionRejected for a
+// connection this speaker will not use for any other reason. Both are shared
+// and must not be mutated.
+var (
+	ceaseCollisionResolution = &Notification{
+		Code:    NotificationCease,
+		Subcode: SubcodeCeaseConnectionCollisionResolution,
+	}
+
+	ceaseConnectionRejected = &Notification{
+		Code:    NotificationCease,
+		Subcode: SubcodeCeaseConnectionRejected,
+	}
+)
 
 // A dialResult is the outcome of one active open.
 type dialResult struct {
@@ -178,33 +189,16 @@ func (a *attempt) dispatch(ctx context.Context) error {
 }
 
 // connectRetryTimerExpires handles a connect retry tick (RFC 4271, section
-// 8.2.2): the cadence restarts a dial which has outlived it, stands by while a
-// connection owns the attempt, or begins the next dial.
+// 8.2.2, event 9): a dial which outlived the connect retry time is dropped,
+// and the next dial begins. The timer is armed only while the dialed slot is
+// empty: a successful dial stops it, and it is re-armed only once the dialed
+// connection is gone. An accepted connection mid-exchange does not suppress
+// the cadence: a peer which completes a TCP handshake and then stalls in
+// OpenSent must not suppress this speaker's active open for the rest of the
+// attempt.
 func (a *attempt) connectRetryTimerExpires(ctx context.Context) error {
-	switch {
-	case a.dialC != nil && a.empty():
-		// The in-flight dial outlived the connect retry time: drop it and
-		// begin another (RFC 4271, section 8.2.2, event 9).
-		a.abandonDial()
-		a.dial(ctx)
-
-	case a.dialC != nil:
-		// An accepted connection is mid-exchange and owns the attempt while
-		// the dial is still in flight, so no new dial starts. The cadence is
-		// re-armed rather than stranded: tcpCRAcked's failure path has no
-		// timer of its own, and the next tick restarts a dial which has
-		// failed by then. A tracked dialed connection never reaches here:
-		// its successful dial stopped the timer.
-		a.restartConnectRetryTimer()
-
-	default:
-		// No dial in flight: keep the active open's cadence even while an
-		// accepted connection is mid-exchange. A peer which completes a TCP
-		// handshake and then stalls in OpenSent must not suppress this
-		// speaker's active open for the rest of the attempt.
-		a.dial(ctx)
-	}
-
+	a.abandonDial()
+	a.dial(ctx)
 	return nil
 }
 
@@ -229,8 +223,7 @@ func (a *attempt) keepaliveChan(d origin) <-chan time.Time {
 }
 
 // restartConnectRetryTimer starts or restarts the connect retry timer at the
-// jittered cadence: dial arms it as each dial begins, and the retry arm re-arms
-// it when it declines to dial, so the next tick re-evaluates.
+// jittered cadence: dial arms it as each dial begins.
 func (a *attempt) restartConnectRetryTimer() {
 	a.connectRetryT.Reset(a.f.jittered(connectRetryTime))
 	a.connectRetryC = a.connectRetryT.C
@@ -255,9 +248,8 @@ func (a *attempt) resumeConnectRetryTimer() {
 // abandonDial cancels the dial in flight, if any, and stops waiting for it.
 // A drain goroutine takes over the abandoned dial and closes the connection
 // a too-late dial produces. This is the only way a dial is given up. Its
-// two callers are the connect retry cadence, which abandons a dial that
-// outlived its tick before starting another, and an attempt's deferred
-// teardown.
+// two callers are the connect retry tick, which abandons a dial that
+// outlived it before starting another, and an attempt's deferred teardown.
 //
 // The drain must not run on the FSM goroutine. A caller's DialFunc is bound
 // by a contract this package cannot enforce: a DialFunc which ignores its
@@ -366,15 +358,29 @@ func (a *attempt) empty() bool {
 }
 
 // fail ends the attempt: every remaining connection is torn down and the
-// failure is reported, then Run retries after the idleceive path has quiesced.
+// failure is reported, and the caller's retry loop owns what happens next.
+// A reader abandoned by the teardown is reported in the Close, like a stuck
+// handler in endSession.
 func (a *attempt) fail(c Close) error {
 	for _, fc := range a.conns() {
-		fc.kill()
+		c.Err = errors.Join(c.Err, fc.kill())
 	}
 
 	a.tracked = [2]*fsmConn{}
 	a.f.onClose(c)
 	return errAttemptOver
+}
+
+// kill tears fc down and untracks it, reporting a reader the teardown had
+// to abandon; see fsmConn.kill. The log carries the abandonment, since the
+// callers here drop a connection while the attempt continues and have no
+// Close to report it in.
+func (a *attempt) kill(fc *fsmConn) {
+	if err := fc.kill(); err != nil {
+		a.f.log.Warn("abandoned a stuck reader goroutine", "origin", fc.origin, "err", err)
+	}
+
+	a.untrack(fc)
 }
 
 // drop tears fc down after sending n; when fc was the last connection, the
@@ -385,12 +391,15 @@ func (a *attempt) drop(fc *fsmConn, n *Notification, cl Close) error {
 		a.f.sendNotification(fc.c, n)
 	}
 
-	fc.kill()
-	a.untrack(fc)
-	if a.empty() {
+	if a.other(fc) == nil {
+		// The last connection: its teardown is the attempt's, and a reader
+		// it abandons is the Close's to report.
+		cl.Err = errors.Join(cl.Err, fc.kill())
+		a.untrack(fc)
 		return a.fail(cl)
 	}
 
+	a.kill(fc)
 	if fc.origin == originDialed {
 		a.resumeConnectRetryTimer()
 	}
@@ -486,12 +495,8 @@ func (a *attempt) tcpConnectionConfirmed(c *Conn) error {
 		// the peer out until the stale occupant's openHoldTime expired.
 		// The Cease is best effort, for an occupant somehow still alive.
 		a.f.log.Info("replaced stale accepted connection", "state", old.state)
-		a.f.sendNotification(old.c, &Notification{
-			Code:    NotificationCease,
-			Subcode: SubcodeCeaseConnectionRejected,
-		})
-		old.kill()
-		a.untrack(old)
+		a.f.sendNotification(old.c, ceaseConnectionRejected)
+		a.kill(old)
 	}
 
 	// A failed OPEN on an accepted connection ends the attempt only on a
@@ -711,8 +716,7 @@ func (a *attempt) keepAliveMsg(ctx context.Context, fc *fsmConn) error {
 	if other := a.other(fc); other != nil {
 		a.f.log.Info("connection collision resolved by establishment", "survivor", fc.origin)
 		a.f.sendNotification(other.c, ceaseCollisionResolution)
-		other.kill()
-		a.untrack(other)
+		a.kill(other)
 	}
 
 	// Establishment: create the session context, start the writer, and
@@ -769,20 +773,24 @@ func (a *attempt) established(ctx context.Context, fc *fsmConn) error {
 
 		case c := <-a.f.connC:
 			// CollisionDetectEstablishedState is false (the RFC 4271 default):
-			// a new connection never displaces an established session.
+			// a collision with an established session closes the new
+			// connection (section 6.8), and the subcode is the collision
+			// procedure's (RFC 4486), as BIRD and FRR send it.
 			a.f.log.Debug("refused connection: session is established")
-			a.f.rejectConn(c)
+			a.f.refuseConn(c, ceaseCollisionResolution)
 
 		case r := <-a.dialC:
 			// The attempt's active open completed after an accepted
-			// connection established the session: refuse it like any other
-			// connection, rather than holding it open, unread, until the
-			// session ends. Nil dialC so the deferred teardown does not drain it again.
+			// connection established the session: the same collision with
+			// an established session, on the connection this speaker
+			// initiated, refused rather than held open, unread, until the
+			// session ends. Nil dialC so the deferred teardown does not
+			// drain it again.
 			a.cancelDial()
 			a.dialC = nil
 			if r.c != nil {
 				a.f.log.Debug("refused dialed connection: session is established")
-				a.f.rejectConn(r.c)
+				a.f.refuseConn(r.c, ceaseCollisionResolution)
 			}
 
 		case <-keepaliveT.C:

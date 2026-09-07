@@ -3,8 +3,10 @@ package bgp
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -232,27 +234,32 @@ func TestFSMGoroutinesEndWithConnect(t *testing.T) {
 // lower bound of FSM.jittered, three quarters of connectRetryTime.
 const rigConnectRetry = 3 * connectRetryTime / 4
 
-// TestFSMRetryDeclineKeepsCadence verifies RFC 4271, section 8.2.2's connect
-// retry handling when a tick finds a dial still in flight beside a tracked
-// accepted connection: the tick declines to dial but re-arms the timer, so
-// that when the hanging dial later fails — Tcp_CR_Acked's failure path in
-// dispatch has no timer of its own — the next tick starts a fresh dial
-// instead of stranding the active open while the accepted connection stalls
-// in OpenSent.
-func TestFSMRetryDeclineKeepsCadence(t *testing.T) {
+// TestFSMRetryAbandonsStaleDialBesideInbound verifies RFC 4271, section
+// 8.2.2's ConnectRetryTimer_Expires handling when the tick finds a dial still
+// in flight beside a tracked accepted connection: the dial which outlived the
+// connect retry time is dropped and a fresh one begins, exactly as with
+// nothing tracked. A peer which completes a TCP handshake and then stalls in
+// OpenSent must not pin this speaker's active open on a dial the network
+// swallowed.
+func TestFSMRetryAbandonsStaleDialBesideInbound(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		// The first dial hangs until released, then fails; every later
-		// dial fails at once.
-		release := make(chan struct{})
+		// The first dial hangs until its context is canceled, reporting
+		// the abandonment; every later dial fails at once.
+		var (
+			dials     atomic.Int32
+			abandoned = make(chan struct{}, 1)
+		)
+
 		r := newFSMRig(t, FSMConfig{DialFunc: func(ctx context.Context) (*Conn, error) {
-			select {
-			case <-release:
-				return nil, errors.New("dial timed out")
-			case <-ctx.Done():
-				return nil, ctx.Err()
+			if dials.Add(1) > 1 {
+				return nil, errors.New("connection refused")
 			}
+
+			<-ctx.Done()
+			abandoned <- struct{}{}
+			return nil, ctx.Err()
 		}})
 		<-r.dialStarted
 
@@ -262,24 +269,10 @@ func TestFSMRetryDeclineKeepsCadence(t *testing.T) {
 		accepted := r.deliver()
 		accepted.expectOpen()
 
-		// The first tick finds the dial in flight: it must decline to dial
-		// and re-arm. Wait settles the bubble so the tick has been handled
-		// before the dial is released.
+		// The tick finds the dial in flight: it is abandoned, and the next
+		// dial begins at once.
 		time.Sleep(rigConnectRetry)
-		synctest.Wait()
-
-		select {
-		case <-r.dialStarted:
-			t.Fatal("a second dial began while the first was still in flight")
-		default:
-		}
-
-		// The hanging dial fails, long after its own tick came and went.
-		close(release)
-		synctest.Wait()
-
-		// The re-armed tick begins a fresh dial.
-		time.Sleep(rigConnectRetry)
+		recv(t, abandoned, "the stale dial to be abandoned")
 		<-r.dialStarted
 
 		// The accepted connection carried the attempt throughout: ctx
@@ -393,8 +386,9 @@ func TestFSMHooksRefuseReentry(t *testing.T) {
 
 // TestFSMDialCompletesAfterEstablished pins the established loop's dialC
 // case: an active open which completes only after an accepted connection
-// established the session is refused with Cease / Connection Rejected, and
-// the session is undisturbed.
+// established the session is a collision with an established session (RFC
+// 4271, section 6.8), refused with Cease / Connection Collision Resolution,
+// and the session is undisturbed.
 func TestFSMDialCompletesAfterEstablished(t *testing.T) {
 	t.Parallel()
 
@@ -426,7 +420,7 @@ func TestFSMDialCompletesAfterEstablished(t *testing.T) {
 		dialed := recv(t, scripts, "the parked dial to complete")
 		dialed.expectNotification(&Notification{
 			Code:    NotificationCease,
-			Subcode: SubcodeCeaseConnectionRejected,
+			Subcode: SubcodeCeaseConnectionCollisionResolution,
 		})
 		dialed.expectClosed()
 
@@ -664,6 +658,55 @@ func TestFSMKeepaliveWriteFailure(t *testing.T) {
 	})
 }
 
+// TestFSMStuckReaderAbandoned pins the bound on the pre-session reader
+// join: a transport which violates the DialFunc contract, its Close leaving
+// a pending read blocked, cannot park the FSM goroutine. The teardown waits
+// out teardownTimeout, abandons the reader, and reports the abandonment in
+// the Close, exactly as endSession reports a stuck handler.
+func TestFSMStuckReaderAbandoned(t *testing.T) {
+	t.Parallel()
+
+	want := &Notification{Code: NotificationHoldTimerExpired}
+
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		scripts := make(chan *script, 1)
+		r := newFSMRig(t, FSMConfig{DialFunc: func(context.Context) (*Conn, error) {
+			client, server := memPipe()
+			scripts <- newScript(t, server)
+			return NewConn(&stuckReadConn{Conn: client, release: release}), nil
+		}})
+		s := recv(t, scripts, "the FSM to dial")
+
+		// The scripted peer never answers the OPEN, so the hold timer
+		// expires on the dialed connection: the attempt's last, whose
+		// teardown concludes the attempt.
+		s.expectOpen()
+		time.Sleep(openHoldTime)
+		s.expectNotification(want)
+
+		// The reader ignores the close. The join waits out its bound, and
+		// the attempt then concludes with the abandonment on record.
+		time.Sleep(teardownTimeout)
+		c := recv(t, r.closeC, "attempt close")
+		if !errors.Is(c.Err, errStuckReader) {
+			t.Fatalf("expected a stuck reader error, got: %v", c.Err)
+		}
+
+		if d := diff(t, want, c.Notification); d != "" {
+			t.Fatalf("unexpected close notification (-want +got):\n%s", d)
+		}
+
+		if err := r.wait(); err != nil {
+			t.Fatalf("unexpected Connect error: %v", err)
+		}
+
+		// Releasing the read lets the abandoned goroutine exit, so the
+		// bubble can end.
+		close(release)
+	})
+}
+
 // An fsmRig runs one FSM under test inside a synctest bubble, over
 // in-memory pipes: each dial's scripted side arrives on dials, and deliver
 // hands in an accepted connection. Connect runs on its own goroutine from
@@ -795,4 +838,16 @@ func (c *writeFailConn) Write(p []byte) (int, error) {
 	}
 
 	return c.Conn.Write(p)
+}
+
+// A stuckReadConn violates the DialFunc transport contract: Close does not
+// unblock a pending Read, which returns only once release is closed.
+type stuckReadConn struct {
+	net.Conn
+	release chan struct{}
+}
+
+func (c *stuckReadConn) Read([]byte) (int, error) {
+	<-c.release
+	return 0, io.EOF
 }

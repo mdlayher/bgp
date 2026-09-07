@@ -15,7 +15,6 @@ func TestDialedSurvives(t *testing.T) {
 		{name: "peer id higher", localID: 1, peerID: 2, want: false},
 		{name: "equal id, local ASN higher", localID: 1, peerID: 1, localASN: 2, peerASN: 1, want: true},
 		{name: "equal id, peer ASN higher", localID: 1, peerID: 1, localASN: 1, peerASN: 2, want: false},
-		{name: "full tie", localID: 1, peerID: 1, localASN: 1, peerASN: 1, want: true},
 	}
 
 	for _, tt := range tests {

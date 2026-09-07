@@ -2,6 +2,7 @@ package bgp
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"time"
 )
@@ -108,17 +109,37 @@ func (fc *fsmConn) sinceBase() int64 {
 	return int64(time.Since(fc.base))
 }
 
+// errStuckReader reports a connection whose reader goroutine did not exit
+// within the teardown bound after the connection was closed: the transport's
+// Close did not unblock its pending read, violating the contract on
+// FSMConfig.DialFunc. The FSM abandons the goroutine to continue; see kill.
+var errStuckReader = errors.New("bgp: a connection's reader did not exit after its close; its goroutine is abandoned")
+
 // kill tears a pre-session connection down: fsmDone unblocks any pending
 // forward, the closed connection unblocks a pending read, and kill then
 // waits for the reader goroutine to exit. An established session has a
 // session context and a writer goroutine as well; endSession owns that
 // teardown order.
-func (fc *fsmConn) kill() {
+//
+// The join is bounded, like endSession's: a transport whose Close does not
+// unblock a read would otherwise park the FSM goroutine forever, silently.
+// The abandoned reader can do no harm: its next forward observes the closed
+// fsmDone channel and it exits. kill reports the abandonment as
+// errStuckReader so the caller can surface it.
+func (fc *fsmConn) kill() error {
 	fc.holdT.Stop()
 	fc.keepaliveT.Stop()
 	close(fc.fsmDone)
 	_ = fc.c.Close()
-	<-fc.readerDone
+
+	t := time.NewTimer(teardownTimeout)
+	defer t.Stop()
+	select {
+	case <-fc.readerDone:
+		return nil
+	case <-t.C:
+		return errStuckReader
+	}
 }
 
 // A connEvent is a reader goroutine's report to the FSM goroutine. Exactly
@@ -349,16 +370,17 @@ func (f *FSM) sendNotification(c *Conn, n *Notification) {
 	}
 }
 
-// rejectConn refuses a connection this speaker will not use, answering the
-// peer's open with Cease / Connection Rejected (RFC 4486) before the close,
-// so the peer's FSM can release the connection without waiting out a timer.
-func (f *FSM) rejectConn(c *Conn) {
-	f.sendNotification(c, &Notification{
-		Code:    NotificationCease,
-		Subcode: SubcodeCeaseConnectionRejected,
-	})
+// refuseConn refuses a connection this speaker will not use, answering the
+// peer's open with the Cease n before the close, so the peer's FSM can
+// release the connection without waiting out a timer. rejectConn is its
+// Cease / Connection Rejected (RFC 4486) form, for a connection refused
+// outside the collision procedure.
+func (f *FSM) refuseConn(c *Conn, n *Notification) {
+	f.sendNotification(c, n)
 	_ = c.Close()
 }
+
+func (f *FSM) rejectConn(c *Conn) { f.refuseConn(c, ceaseConnectionRejected) }
 
 // writeBounded writes m on c under a write deadline, then clears it: every
 // write on the FSM goroutine must be bounded, or an unresponsive peer stalls

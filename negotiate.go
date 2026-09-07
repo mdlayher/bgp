@@ -231,18 +231,16 @@ func gracefulRestart(caps []Capability) *GracefulRestart {
 // dialedSurvives resolves a connection collision: it reports whether the
 // locally initiated connection survives, per RFC 4271, section 6.8 and RFC
 // 6286, section 2.3.
+//
+// A full tie cannot occur: negotiate rejects an internal peer bearing the
+// local identifier (RFC 6286, section 2.2), and the identities compared here
+// are the negotiated ones.
 func dialedSurvives(localID, peerID Identifier, localASN, peerASN uint32) bool {
-	switch {
-	case localID != peerID:
+	if localID != peerID {
 		return localID > peerID
-	case localASN != peerASN:
-		return localASN > peerASN
-	default:
-		// A full tie is unreachable through negotiate, which rejects an
-		// internal peer bearing the local identifier (RFC 6286, section
-		// 2.2); keep the dialed connection as a defensive default.
-		return true
 	}
+
+	return localASN > peerASN
 }
 
 // negotiatedFamilies intersects the local family set with the peer's

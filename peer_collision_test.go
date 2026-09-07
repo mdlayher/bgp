@@ -283,7 +283,9 @@ func TestPeerCollision(t *testing.T) {
 
 // TestPeerCollisionEstablished verifies CollisionDetectEstablishedState =
 // false: a connection which arrives after the session is established is
-// dropped immediately, without displacing the session.
+// dropped immediately with Cease / Connection Collision Resolution, the
+// subcode of the RFC 4271, section 6.8 procedure, without displacing the
+// session.
 func TestPeerCollisionEstablished(t *testing.T) {
 	t.Parallel()
 
@@ -297,7 +299,7 @@ func TestPeerCollisionEstablished(t *testing.T) {
 		late := r.deliver()
 		late.expectNotification(&Notification{
 			Code:    NotificationCease,
-			Subcode: SubcodeCeaseConnectionRejected,
+			Subcode: SubcodeCeaseConnectionCollisionResolution,
 		})
 		late.expectClosed()
 

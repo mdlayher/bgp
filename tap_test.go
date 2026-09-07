@@ -29,6 +29,13 @@ func (l *tapLog) tap(e MessageEvent) {
 	l.events = append(l.events, e)
 }
 
+// clear forgets every event observed so far.
+func (l *tapLog) clear() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = nil
+}
+
 // types returns the message types observed in dir, in order, with a nil
 // Message rendered as its error's type so malformed frames stand out.
 func (l *tapLog) types(dir Direction) []string {
@@ -326,6 +333,61 @@ func TestPeerOnMessageDelivered(t *testing.T) {
 		s := r.deliver()
 		s.establish(scriptOpen())
 		recv(t, r.estC, "session establishment")
+
+		want := map[Direction][]string{
+			DirectionSent:     {"OPEN", "KEEPALIVE"},
+			DirectionReceived: {"OPEN", "KEEPALIVE"},
+		}
+
+		for dir, w := range want {
+			if d := diff(t, w, l.types(dir)); d != "" {
+				t.Fatalf("unexpected %s stream (-want +got):\n%s", dir, d)
+			}
+		}
+	})
+}
+
+// TestPeerOnMessageSeeded covers the third adoption point: a connection
+// delivered during the Peer's idle hold seeds the next attempt, and is
+// tapped in both directions from its OPEN onward, exactly like one
+// delivered into a running attempt. The seed reaches the Peer through
+// DeliverConn's idle refusal, which never adopts, so the seeded connect
+// must.
+func TestPeerOnMessageSeeded(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		var l tapLog
+		r := newPipeRig(t, PeerConfig{
+			// Every dial stalls until canceled: each attempt's only
+			// connection is the delivered one.
+			DialFunc: func(ctx context.Context) (*Conn, error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+			OnMessage: func(_ *Peer, e MessageEvent) { l.tap(e) },
+		})
+
+		// A first session, reset, puts the retry loop into its idle hold.
+		s := r.deliver()
+		s.establish(scriptOpen())
+		recv(t, r.estC, "session establishment")
+
+		if err := r.p.ResetSession(t.Context(), nil); err != nil {
+			t.Fatalf("failed to reset session: %v", err)
+		}
+
+		_ = s.nextNotification()
+		s.expectClosed()
+		recv(t, r.closeC, "session close")
+
+		// Mid-hold, the remote's open arrives and seeds the next attempt.
+		// Only the seeded connection's stream is under test.
+		time.Sleep(idleHoldTime / 4)
+		l.clear()
+		s2 := r.deliver()
+		s2.establish(scriptOpen())
+		recv(t, r.estC, "seeded session establishment")
 
 		want := map[Direction][]string{
 			DirectionSent:     {"OPEN", "KEEPALIVE"},

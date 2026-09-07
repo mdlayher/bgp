@@ -538,14 +538,9 @@ func (s *Server) acceptLoop(run *serverRun, l *Listener) error {
 // deliver routes one accepted connection to the peer configured for its
 // remote address, or rejects it as an unconfigured peer.
 func (s *Server) deliver(run *serverRun, c *Conn) {
-	ta, ok := c.RemoteAddr().(*net.TCPAddr)
-	if !ok {
-		// Impossible from the Server's own TCP listeners.
-		_ = c.Close()
-		return
-	}
-
-	raddr := ta.AddrPort()
+	// A Listener accepts TCP connections only, so the remote address is
+	// always a TCPAddr.
+	raddr := c.RemoteAddr().(*net.TCPAddr).AddrPort()
 	addr := raddr.Addr().Unmap()
 
 	s.mu.Lock()

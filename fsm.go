@@ -525,24 +525,25 @@ func (f *FSM) Connect(ctx context.Context) error {
 // connect implements Connect. A non-nil seed is a connection accepted while
 // the FSM was idle (Peer's idle hold adopting an inbound open),
 // planted in connC before the attempt begins, exactly as if DeliverConn had
-// won the race with the first dispatch.
+// won the race with the first dispatch. Only Peer.run passes a seed, and its
+// own running guard serializes its connects, so a seeded connect never finds
+// the FSM busy.
 func (f *FSM) connect(ctx context.Context, seed *Conn) error {
 	f.mu.Lock()
 	select {
 	case <-f.runningC:
 		f.mu.Unlock()
-		if seed != nil {
-			_ = seed.Close()
-		}
-
 		return errors.New("bgp: FSM is not idle: Connect is already in progress")
 	default:
 		close(f.runningC)
 	}
 
 	if seed != nil {
-		// The buffer has room: the last connect's exit drained it, and
-		// DeliverConn refuses while the FSM is idle.
+		// The seed reached the Peer through DeliverConn's idle refusal,
+		// which precedes adoption, so it is adopted here, before any
+		// message crosses it. The buffer has room: the last connect's exit
+		// drained it, and DeliverConn refuses while the FSM is idle.
+		f.adopt(seed)
 		f.connC <- seed
 	}
 
@@ -593,18 +594,24 @@ func (f *FSM) DeliverConn(c *Conn) error {
 		return errFSMIdle
 	}
 
+	// Adoption precedes the handoff: once the connection is on connC the
+	// FSM goroutine may write its OPEN before this goroutine runs again,
+	// and that OPEN must reach the tap. A connection the FSM refuses is
+	// untapped again, so a connection it never took reports nothing.
+	f.adopt(c)
 	select {
 	case f.connC <- c:
-		f.adopt(c)
 		return nil
 	default:
+		c.setTap(nil)
 		return errors.New("bgp: FSM already has a pending connection")
 	}
 }
 
 // adopt marks c as the FSM's own: from here every message it frames is
-// reported to the tap. It runs at the two points a Conn enters the FSM,
-// a successful dial and delivery, before the FSM reads or writes on it.
+// reported to the tap. It runs at the three points a Conn enters the FSM,
+// a successful dial, delivery, and a seeded connect, before any goroutine
+// reads or writes on it for the FSM.
 func (f *FSM) adopt(c *Conn) {
 	if f.tap != nil {
 		c.setTap(f.tap)
