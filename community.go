@@ -7,6 +7,19 @@ import (
 	"net/netip"
 )
 
+// Well-known communities of the long-lived graceful restart extension (RFC
+// 9494, section 6), in the reserved 65535 range. Attaching, honoring, and
+// depreferencing by them is the caller's RIB's; this package names them.
+const (
+	// CommunityLLGRStale is LLGR_STALE (65535:6): the route was retained
+	// as long-lived stale by the speaker that attached it.
+	CommunityLLGRStale Community = 0xffff0006
+
+	// CommunityNoLLGR is NO_LLGR (65535:7): the route must not be retained
+	// by long-lived graceful restart.
+	CommunityNoLLGR Community = 0xffff0007
+)
+
 // A Community is a BGP community value, as described in RFC 1997,
 // conventionally written as "ASN:value".
 type Community uint32
@@ -16,9 +29,17 @@ func NewCommunity(asn, value uint16) Community {
 	return Community(uint32(asn)<<16 | uint32(value))
 }
 
-// String returns the conventional "ASN:value" form of a Community.
+// String returns the conventional "ASN:value" form of a Community, or the
+// RFC name of a well-known value this package models, such as LLGR_STALE.
 func (c Community) String() string {
-	return fmt.Sprintf("%d:%d", uint32(c)>>16, uint32(c)&0xffff)
+	switch c {
+	case CommunityLLGRStale:
+		return "LLGR_STALE"
+	case CommunityNoLLGR:
+		return "NO_LLGR"
+	default:
+		return fmt.Sprintf("%d:%d", uint32(c)>>16, uint32(c)&0xffff)
+	}
 }
 
 // Communities is the COMMUNITIES attribute: the community values applied to

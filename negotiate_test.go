@@ -1,6 +1,9 @@
 package bgp
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestDialedSurvives(t *testing.T) {
 	t.Parallel()
@@ -191,5 +194,47 @@ func TestExtendedNextHopFamilies(t *testing.T) {
 
 	if d := diff(t, []Family{v4u, v4m}, extendedNextHopFamilies(caps)); d != "" {
 		t.Fatalf("unexpected families (-want +got):\n%s", d)
+	}
+}
+
+func TestLongLivedGracefulRestart(t *testing.T) {
+	t.Parallel()
+
+	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+
+	// No capability at all, or only a malformed one, decodes to nil, exactly
+	// as gracefulRestart treats the RFC 4724 capability.
+	for _, caps := range [][]Capability{
+		nil,
+		{MultiprotocolCapability(v4u), must(GracefulRestartCapability(GracefulRestart{}))},
+		{{Code: CapabilityLongLivedGracefulRestart, Data: []byte{0x00, 0x01, 0x01}}},
+	} {
+		if got := longLivedGracefulRestart(caps); got != nil {
+			t.Fatalf("expected no long-lived graceful restart for %v, but got: %+v", caps, got)
+		}
+	}
+
+	// The first well-formed capability wins, after a malformed one. A
+	// graceful restart capability need not accompany it: RFC 9494's
+	// section 4.1 pairing is the caller's to honor.
+	want := LongLivedGracefulRestart{
+		Families: []LongLivedGracefulRestartFamily{
+			{Family: v4u, ForwardingPreserved: true, StaleTime: time.Hour},
+		},
+	}
+
+	caps := []Capability{
+		{Code: CapabilityLongLivedGracefulRestart, Data: []byte{0x00, 0x01, 0x01}},
+		must(LongLivedGracefulRestartCapability(want)),
+		must(LongLivedGracefulRestartCapability(LongLivedGracefulRestart{})),
+	}
+
+	got := longLivedGracefulRestart(caps)
+	if got == nil {
+		t.Fatal("long-lived graceful restart capability was not decoded")
+	}
+
+	if d := diff(t, want, *got); d != "" {
+		t.Fatalf("unexpected long-lived graceful restart (-want +got):\n%s", d)
 	}
 }

@@ -221,13 +221,14 @@ type CapabilityCode uint8
 
 // CapabilityCode values, as assigned by IANA.
 const (
-	CapabilityMultiprotocol   CapabilityCode = 1
-	CapabilityRouteRefresh    CapabilityCode = 2
-	CapabilityExtendedNextHop CapabilityCode = 5
-	CapabilityGracefulRestart CapabilityCode = 64
-	CapabilityFourOctetAS     CapabilityCode = 65
-	CapabilityAddPath         CapabilityCode = 69
-	CapabilityFQDN            CapabilityCode = 73
+	CapabilityMultiprotocol            CapabilityCode = 1
+	CapabilityRouteRefresh             CapabilityCode = 2
+	CapabilityExtendedNextHop          CapabilityCode = 5
+	CapabilityGracefulRestart          CapabilityCode = 64
+	CapabilityFourOctetAS              CapabilityCode = 65
+	CapabilityAddPath                  CapabilityCode = 69
+	CapabilityLongLivedGracefulRestart CapabilityCode = 71
+	CapabilityFQDN                     CapabilityCode = 73
 )
 
 // A Capability is a BGP capability in raw binary form, advertised in an Open
@@ -416,6 +417,102 @@ func (c Capability) GracefulRestart() (GracefulRestart, error) {
 	}
 
 	return gr, nil
+}
+
+// maxLongLivedStaleTime is the largest stale time a long-lived graceful
+// restart capability's 24 bit whole-seconds field can carry (RFC 9494,
+// section 3).
+const maxLongLivedStaleTime = 0xffffff * time.Second
+
+// A LongLivedGracefulRestart is the decoded content of a long-lived graceful
+// restart capability (RFC 9494): per family, a speaker's claim that its
+// forwarding state survives a restart and how long its routes may be kept
+// as stale after the graceful restart period ends. This package carries the
+// negotiation surface only. The behavior the capability negotiates, such as
+// retaining routes as long-lived stale, attaching LLGR_STALE and
+// depreferencing, and running the long-lived stale timer, belongs to the
+// caller's RIB.
+//
+// RFC 9494, section 4.1 requires the capability to be advertised alongside
+// the graceful restart capability, and a speaker which advertises it alone
+// is treated as not having advertised it. The core does not enforce what the
+// caller advertises; the caller sets both.
+type LongLivedGracefulRestart struct {
+	// Families lists the families the speaker claims long-lived forwarding
+	// state for.
+	Families []LongLivedGracefulRestartFamily
+}
+
+// A LongLivedGracefulRestartFamily is one family entry of a long-lived
+// graceful restart capability: an address family, the speaker's claim that
+// its forwarding state for the family survived the restart (the F bit), and
+// the Long-lived Stale Time.
+type LongLivedGracefulRestartFamily struct {
+	Family              Family
+	ForwardingPreserved bool
+
+	// StaleTime is how long the peer may retain this speaker's routes for
+	// the family as long-lived stale, once the graceful restart period
+	// ends: whole seconds, at most 16777215, per the 24 bit wire field.
+	StaleTime time.Duration
+}
+
+// LongLivedGracefulRestartCapability produces a Capability which advertises
+// long-lived graceful restart. Each StaleTime must lie within
+// [0, 16777215s], the 24 bit whole-seconds wire field, and is truncated to
+// whole seconds.
+//
+// A Peer or FSM advertises long-lived graceful restart through its
+// configuration's LongLivedGracefulRestart field, not by placing this
+// Capability in Capabilities.
+func LongLivedGracefulRestartCapability(llgr LongLivedGracefulRestart) (Capability, error) {
+	b := make([]byte, 0, 7*len(llgr.Families))
+	for _, f := range llgr.Families {
+		secs := f.StaleTime / time.Second
+		if secs < 0 || secs > maxLongLivedStaleTime/time.Second {
+			return Capability{}, fmt.Errorf("bgp: long-lived graceful restart stale time must be within [0, %s]: %s", maxLongLivedStaleTime, f.StaleTime)
+		}
+
+		b = binary.BigEndian.AppendUint16(b, uint16(f.Family.AFI))
+		var flags byte
+		if f.ForwardingPreserved {
+			flags = 0x80
+		}
+
+		b = append(b, byte(f.Family.SAFI), flags)
+		b = append(b, byte(secs>>16), byte(secs>>8), byte(secs))
+	}
+
+	return Capability{Code: CapabilityLongLivedGracefulRestart, Data: b}, nil
+}
+
+// LongLivedGracefulRestart parses the content of a
+// CapabilityLongLivedGracefulRestart Capability. The returned value never
+// references Data, so it remains valid after the buffer Data references is
+// reused.
+func (c Capability) LongLivedGracefulRestart() (LongLivedGracefulRestart, error) {
+	if c.Code != CapabilityLongLivedGracefulRestart {
+		return LongLivedGracefulRestart{}, fmt.Errorf("bgp: capability %d is not a long-lived graceful restart capability", uint8(c.Code))
+	}
+
+	if len(c.Data)%7 != 0 {
+		return LongLivedGracefulRestart{}, errors.New("bgp: invalid long-lived graceful restart capability")
+	}
+
+	var llgr LongLivedGracefulRestart
+	for d := c.Data; len(d) > 0; d = d[7:] {
+		secs := uint32(d[4])<<16 | uint32(d[5])<<8 | uint32(d[6])
+		llgr.Families = append(llgr.Families, LongLivedGracefulRestartFamily{
+			Family: Family{
+				AFI:  AFI(binary.BigEndian.Uint16(d[0:2])),
+				SAFI: SAFI(d[2]),
+			},
+			ForwardingPreserved: d[3]&0x80 != 0,
+			StaleTime:           time.Duration(secs) * time.Second,
+		})
+	}
+
+	return llgr, nil
 }
 
 // An AddPathFamily is one family entry of an add-path capability (RFC

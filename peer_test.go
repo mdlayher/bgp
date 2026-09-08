@@ -77,6 +77,14 @@ func TestNewPeerErrors(t *testing.T) {
 			}),
 		},
 		{
+			name: "long-lived graceful restart capability",
+			c: valid(func(c *PeerConfig) {
+				c.Capabilities = []Capability{
+					must(LongLivedGracefulRestartCapability(LongLivedGracefulRestart{})),
+				}
+			}),
+		},
+		{
 			name: "add-path capability",
 			c: valid(func(c *PeerConfig) {
 				c.Capabilities = []Capability{
@@ -151,6 +159,26 @@ func TestNewPeerErrors(t *testing.T) {
 				// data, caught by the OPEN marshal proof.
 				c.GracefulRestart = &GracefulRestartConfig{
 					Families: make([]GracefulRestartFamily, 64),
+				}
+			}),
+		},
+		{
+			name: "long-lived graceful restart stale time too large",
+			c: valid(func(c *PeerConfig) {
+				c.LongLivedGracefulRestart = &LongLivedGracefulRestart{
+					Families: []LongLivedGracefulRestartFamily{
+						{StaleTime: maxLongLivedStaleTime + time.Second},
+					},
+				}
+			}),
+		},
+		{
+			name: "long-lived graceful restart families too large",
+			c: valid(func(c *PeerConfig) {
+				// 37 family entries overflow the capability's 255 byte
+				// data, caught by the OPEN marshal proof.
+				c.LongLivedGracefulRestart = &LongLivedGracefulRestart{
+					Families: make([]LongLivedGracefulRestartFamily, 37),
 				}
 			}),
 		},
@@ -543,6 +571,124 @@ func TestPeerGracefulRestart(t *testing.T) {
 			})
 		})
 	}
+}
+
+// TestPeerLongLivedGracefulRestart drives the long-lived graceful restart
+// negotiation surface in both directions, alongside graceful restart as RFC
+// 9494, section 4.1 requires: the local OPEN carries both capabilities
+// generated from Identity, and the peer's pair is decoded side by side into
+// Session.GracefulRestart and Session.LongLivedGracefulRestart. The behavior
+// negotiated here is deliberately absent: long-lived retention, LLGR_STALE,
+// and the stale timer are the caller's RIB's job.
+func TestPeerLongLivedGracefulRestart(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		var (
+			v4u = Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+			v6u = Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+		)
+
+		r := newPipeRig(t, PeerConfig{
+			Families: []Family{v4u, v6u},
+			GracefulRestart: &GracefulRestartConfig{
+				RestartTime: 120 * time.Second,
+				Families: []GracefulRestartFamily{
+					{Family: v4u, ForwardingPreserved: true},
+					{Family: v6u, ForwardingPreserved: true},
+				},
+			},
+			LongLivedGracefulRestart: &LongLivedGracefulRestart{
+				Families: []LongLivedGracefulRestartFamily{
+					{Family: v4u, ForwardingPreserved: true, StaleTime: time.Hour},
+					{Family: v6u, StaleTime: 2 * time.Hour},
+				},
+			},
+		})
+
+		s := r.acceptScript()
+
+		want := &Open{
+			ASN:      64496,
+			HoldTime: 90 * time.Second,
+			ID:       MustParseIdentifier("192.0.2.1"),
+			Capabilities: []Capability{
+				MultiprotocolCapability(v4u),
+				MultiprotocolCapability(v6u),
+				must(GracefulRestartCapability(GracefulRestart{
+					RestartTime: 120 * time.Second,
+					Families: []GracefulRestartFamily{
+						{Family: v4u, ForwardingPreserved: true},
+						{Family: v6u, ForwardingPreserved: true},
+					},
+				})),
+				must(LongLivedGracefulRestartCapability(LongLivedGracefulRestart{
+					Families: []LongLivedGracefulRestartFamily{
+						{Family: v4u, ForwardingPreserved: true, StaleTime: time.Hour},
+						{Family: v6u, StaleTime: 2 * time.Hour},
+					},
+				})),
+			},
+		}
+
+		if d := diff(t, want, s.expectOpen()); d != "" {
+			t.Fatalf("unexpected OPEN (-want +got):\n%s", d)
+		}
+
+		// The peer advertises its own pair of claims, in the shape a BIRD
+		// speaker sends: a graceful restart capability, then a long-lived
+		// one with a day-long stale time. Both must arrive decoded on the
+		// Session.
+		peerGR := GracefulRestart{
+			RestartTime: 120 * time.Second,
+			Families: []GracefulRestartFamily{
+				{Family: v4u, ForwardingPreserved: true},
+				{Family: v6u, ForwardingPreserved: true},
+			},
+		}
+
+		peerLLGR := LongLivedGracefulRestart{
+			Families: []LongLivedGracefulRestartFamily{
+				{Family: v4u, ForwardingPreserved: true, StaleTime: 24 * time.Hour},
+				{Family: v6u, ForwardingPreserved: true, StaleTime: 24 * time.Hour},
+			},
+		}
+
+		open := scriptOpen()
+		open.Capabilities = []Capability{
+			MultiprotocolCapability(v4u),
+			MultiprotocolCapability(v6u),
+			must(GracefulRestartCapability(peerGR)),
+			must(LongLivedGracefulRestartCapability(peerLLGR)),
+		}
+
+		// The OPEN was already consumed by the diff above; complete the
+		// exchange from there rather than via establish.
+		s.write(open)
+		s.expectKeepalive()
+		s.write(&Keepalive{})
+
+		sess := recv(t, r.estC, "session establishment")
+		if sess.GracefulRestart == nil {
+			t.Fatal("peer graceful restart capability was not decoded")
+		}
+
+		if d := diff(t, peerGR, *sess.GracefulRestart); d != "" {
+			t.Fatalf("unexpected graceful restart (-want +got):\n%s", d)
+		}
+
+		if sess.LongLivedGracefulRestart == nil {
+			t.Fatal("peer long-lived graceful restart capability was not decoded")
+		}
+
+		if d := diff(t, peerLLGR, *sess.LongLivedGracefulRestart); d != "" {
+			t.Fatalf("unexpected long-lived graceful restart (-want +got):\n%s", d)
+		}
+
+		if d := diff(t, want, sess.Local); d != "" {
+			t.Fatalf("unexpected local OPEN on Session (-want +got):\n%s", d)
+		}
+	})
 }
 
 // TestPeerHoldTimeTruncated pins the wire-precision rule: a configured hold

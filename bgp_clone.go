@@ -150,3 +150,20 @@ var _GracefulRestartConfigCloneNeedsRegeneration = GracefulRestartConfig(struct 
 	Families            []GracefulRestartFamily
 	Restarting          func() bool
 }{})
+
+// Clone makes a deep copy of LongLivedGracefulRestart.
+// The result aliases no memory with the original.
+func (src *LongLivedGracefulRestart) Clone() *LongLivedGracefulRestart {
+	if src == nil {
+		return nil
+	}
+	dst := new(LongLivedGracefulRestart)
+	*dst = *src
+	dst.Families = append(src.Families[:0:0], src.Families...)
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _LongLivedGracefulRestartCloneNeedsRegeneration = LongLivedGracefulRestart(struct {
+	Families []LongLivedGracefulRestartFamily
+}{})

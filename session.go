@@ -116,6 +116,15 @@ type Session struct {
 	// graceful restart behavior is the caller's.
 	GracefulRestart *GracefulRestart
 
+	// LongLivedGracefulRestart is the peer's decoded long-lived graceful
+	// restart capability (RFC 9494), or nil when the peer advertised none,
+	// or only a malformed one. It is fully owned like GracefulRestart, and
+	// carries the peer's claims verbatim: RFC 9494, section 4.1 makes it
+	// meaningful only alongside GracefulRestart, a pairing the caller
+	// checks, since all long-lived graceful restart behavior is the
+	// caller's.
+	LongLivedGracefulRestart *LongLivedGracefulRestart
+
 	// HoldTime is the negotiated hold time: the minimum of the two
 	// speakers' proposals, and the budget for a single handler invocation.
 	HoldTime time.Duration

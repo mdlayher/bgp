@@ -520,6 +520,15 @@ func FuzzCapabilityParse(f *testing.F) {
 		f.Fatalf("failed to build graceful restart capability: %v", err)
 	}
 
+	llgrCap, err := LongLivedGracefulRestartCapability(LongLivedGracefulRestart{
+		Families: []LongLivedGracefulRestartFamily{
+			{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, ForwardingPreserved: true, StaleTime: time.Hour},
+		},
+	})
+	if err != nil {
+		f.Fatalf("failed to build long-lived graceful restart capability: %v", err)
+	}
+
 	fqdnCap, err := FQDNCapability("speaker", "example.com")
 	if err != nil {
 		f.Fatalf("failed to build FQDN capability: %v", err)
@@ -531,6 +540,7 @@ func FuzzCapabilityParse(f *testing.F) {
 		MultiprotocolCapability(Family{AFI: AFIIPv6, SAFI: SAFIUnicast}),
 		ExtendedNextHopCapability(Family{AFI: AFIIPv4, SAFI: SAFIUnicast}),
 		grCap,
+		llgrCap,
 		apCap,
 		fqdnCap,
 		{Code: CapabilityRouteRefresh},
@@ -591,6 +601,25 @@ func FuzzCapabilityParse(f *testing.F) {
 
 			if d := diff(t, gr, gr2); d != "" {
 				t.Fatalf("graceful restart capability did not round trip (-want +got):\n%s", d)
+			}
+		case CapabilityLongLivedGracefulRestart:
+			llgr, err := c.LongLivedGracefulRestart()
+			if err != nil {
+				return
+			}
+
+			c2, err := LongLivedGracefulRestartCapability(llgr)
+			if err != nil {
+				t.Fatalf("parsed long-lived graceful restart failed to re-encode: %v", err)
+			}
+
+			llgr2, err := c2.LongLivedGracefulRestart()
+			if err != nil {
+				t.Fatalf("failed to re-parse long-lived graceful restart capability: %v", err)
+			}
+
+			if d := diff(t, llgr, llgr2); d != "" {
+				t.Fatalf("long-lived graceful restart capability did not round trip (-want +got):\n%s", d)
 			}
 		case CapabilityAddPath:
 			fs, err := c.AddPath()

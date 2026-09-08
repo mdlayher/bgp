@@ -523,6 +523,106 @@ func TestGracefulRestartCapabilityErrors(t *testing.T) {
 	}
 }
 
+func TestLongLivedGracefulRestartCapability(t *testing.T) {
+	t.Parallel()
+
+	// RFC 9494, section 3: per family an AFI, a SAFI, a flags byte whose
+	// top bit is Forwarding Preserved, and a 24 bit whole-seconds Long-lived
+	// Stale Time. There is no header.
+	llgr := LongLivedGracefulRestart{
+		Families: []LongLivedGracefulRestartFamily{
+			{
+				Family:              Family{AFI: AFIIPv4, SAFI: SAFIUnicast},
+				ForwardingPreserved: true,
+				StaleTime:           maxLongLivedStaleTime,
+			},
+			{
+				Family:    Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				StaleTime: 24 * time.Hour,
+			},
+		},
+	}
+
+	c := must(LongLivedGracefulRestartCapability(llgr))
+
+	want := Capability{
+		Code: CapabilityLongLivedGracefulRestart,
+		Data: []byte{
+			0x00, 0x01, 0x01, 0x80, 0xff, 0xff, 0xff, // IPv4 unicast, forwarding preserved, 16777215s
+			0x00, 0x02, 0x01, 0x00, 0x01, 0x51, 0x80, // IPv6 unicast, 86400s
+		},
+	}
+
+	if d := diff(t, want, c); d != "" {
+		t.Fatalf("unexpected capability (-want +got):\n%s", d)
+	}
+
+	// The decoder must invert the encoder exactly.
+	got, err := c.LongLivedGracefulRestart()
+	if err != nil {
+		t.Fatalf("failed to parse capability: %v", err)
+	}
+
+	if d := diff(t, llgr, got); d != "" {
+		t.Fatalf("unexpected long-lived graceful restart (-want +got):\n%s", d)
+	}
+
+	// The stale time is truncated to the wire's whole-second precision.
+	c = must(LongLivedGracefulRestartCapability(LongLivedGracefulRestart{
+		Families: []LongLivedGracefulRestartFamily{{StaleTime: 90500 * time.Millisecond}},
+	}))
+	if got := must(c.LongLivedGracefulRestart()).Families[0].StaleTime; got != 90*time.Second {
+		t.Fatalf("unexpected stale time: got %s, want 90s", got)
+	}
+
+	// An empty capability is legal in both directions: no families claimed.
+	c = must(LongLivedGracefulRestartCapability(LongLivedGracefulRestart{}))
+	if len(c.Data) != 0 {
+		t.Fatalf("unexpected data for an empty capability: % x", c.Data)
+	}
+
+	if got := must(c.LongLivedGracefulRestart()); len(got.Families) != 0 {
+		t.Fatalf("unexpected families for an empty capability: %+v", got.Families)
+	}
+}
+
+func TestLongLivedGracefulRestartCapabilityErrors(t *testing.T) {
+	t.Parallel()
+
+	// The 24 bit wire field cannot carry these; they are rejected, never
+	// silently clamped.
+	for _, d := range []time.Duration{maxLongLivedStaleTime + time.Second, -time.Second} {
+		llgr := LongLivedGracefulRestart{
+			Families: []LongLivedGracefulRestartFamily{{StaleTime: d}},
+		}
+
+		if _, err := LongLivedGracefulRestartCapability(llgr); err == nil {
+			t.Fatalf("expected an error for stale time %s, but none occurred", d)
+		} else {
+			t.Logf("err: %v", err)
+		}
+	}
+
+	// The decoder rejects other capabilities and malformed data: a
+	// truncated family entry, and a whole entry plus a truncated one.
+	caps := []Capability{
+		must(GracefulRestartCapability(GracefulRestart{})),
+		{Code: CapabilityLongLivedGracefulRestart, Data: []byte{0x00, 0x01, 0x01, 0x80, 0x00, 0x00}},
+		{Code: CapabilityLongLivedGracefulRestart, Data: []byte{
+			0x00, 0x01, 0x01, 0x80, 0x00, 0x00, 0x00,
+			0x00, 0x02, 0x01,
+		}},
+	}
+
+	for _, c := range caps {
+		if _, err := c.LongLivedGracefulRestart(); err == nil {
+			t.Fatalf("expected an error for capability %v, but none occurred", c)
+		} else {
+			t.Logf("err: %v", err)
+		}
+	}
+}
+
 // TestOpenParseFourOctetASWins verifies that a Four-Octet AS Number
 // capability overrides the fixed 2 byte ASN field, and is stripped from the
 // parsed Capabilities.

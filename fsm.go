@@ -93,11 +93,10 @@ type Identity struct {
 	// capabilities at all: the classic IPv4 unicast speaker.
 	Families []Family
 
-	// Capabilities carries any further capabilities verbatim: extended
-	// next hop, FQDN, and anything this package does not model. The
-	// capabilities this package encodes itself (multiprotocol, route
-	// refresh, graceful restart, and the automatic four-octet AS) have
-	// their own fields and are rejected here.
+	// Capabilities carries any further capabilities verbatim: anything
+	// this package does not model, such as extended next hop or FQDN. A
+	// capability this package encodes itself, from its own Identity field
+	// or automatically like four-octet AS, is rejected here.
 	Capabilities []Capability
 
 	// RouteRefresh advertises the route refresh capability (RFC 2918): a
@@ -113,6 +112,15 @@ type Identity struct {
 	// the FSM owns the encoding. Only the negotiation surface lives in
 	// this package; see [GracefulRestart] for what remains the caller's.
 	GracefulRestart *GracefulRestartConfig
+
+	// LongLivedGracefulRestart, if set, advertises the long-lived graceful
+	// restart capability (RFC 9494) verbatim. It must not also appear in
+	// Capabilities. RFC 9494, section 4.1 requires GracefulRestart to be
+	// advertised alongside it, and a peer treats the capability as absent
+	// otherwise; the core does not enforce that pairing, so the caller
+	// sets both. Only the negotiation surface lives in this package; see
+	// [LongLivedGracefulRestart] for what remains the caller's.
+	LongLivedGracefulRestart *LongLivedGracefulRestart
 
 	// AddPath, if set, advertises the add-path capability (RFC 7911) for
 	// the listed families and directions. It must not also appear in
@@ -421,6 +429,8 @@ func NewFSM(c FSMConfig) (*FSM, error) {
 			return nil, errors.New("bgp: multiprotocol capabilities are generated from Families and must not be set")
 		case CapabilityGracefulRestart:
 			return nil, errors.New("bgp: the graceful restart capability is generated from GracefulRestart and must not be set")
+		case CapabilityLongLivedGracefulRestart:
+			return nil, errors.New("bgp: the long-lived graceful restart capability is generated from LongLivedGracefulRestart and must not be set")
 		case CapabilityRouteRefresh:
 			return nil, errors.New("bgp: the route refresh capability is generated from RouteRefresh and must not be set")
 		case CapabilityAddPath:
@@ -437,6 +447,7 @@ func NewFSM(c FSMConfig) (*FSM, error) {
 	c.Families = slices.Clone(c.Families)
 	c.Capabilities = slices.Clone(c.Capabilities)
 	c.GracefulRestart = c.GracefulRestart.Clone()
+	c.LongLivedGracefulRestart = c.LongLivedGracefulRestart.Clone()
 	c.AddPath = slices.Clone(c.AddPath)
 
 	log := c.Logger

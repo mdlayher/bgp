@@ -118,6 +118,18 @@ _Avoid_: router ID
 The speaker's selected routes after best-path selection across all
 peers. Per-speaker; owned by the caller's RIB.
 
+**Long-lived graceful restart**:
+The extension of graceful restart (RFC 9494) by which a helper keeps a
+peer's stale routes past the restart time, depreferenced and marked
+LLGR_STALE, until the long-lived stale time expires. Negotiated per
+family by its own capability; the retention is the caller's RIB's.
+
+**Long-lived stale time**:
+The retention deadline a speaker advertises per family in its
+long-lived graceful restart capability: how long a helper may keep its
+routes as stale once the restart time has passed. At most 16777215
+seconds on the wire.
+
 **Message**:
 One complete BGP protocol unit on the wire: OPEN, UPDATE, NOTIFICATION,
 KEEPALIVE, or ROUTE-REFRESH.
@@ -226,7 +238,8 @@ Any BGP endpoint, local or remote.
 
 **Stale route**:
 A route a helper retains after its session died, pending refresh by the
-returning peer or expiry of the restart time.
+returning peer or expiry of the restart time, or of the long-lived stale
+time when long-lived graceful restart was negotiated.
 
 **Tap**:
 An observation-only hook on a peering's message stream: it sees every

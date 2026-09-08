@@ -1183,6 +1183,9 @@ func TestAttributeStrings(t *testing.T) {
 		{name: "origin incomplete", s: OriginIncomplete.String(), want: "incomplete"},
 		{name: "origin unknown", s: Origin(5).String(), want: "unknown(5)"},
 		{name: "community", s: NewCommunity(64496, 100).String(), want: "64496:100"},
+		{name: "community LLGR_STALE", s: CommunityLLGRStale.String(), want: "LLGR_STALE"},
+		{name: "community NO_LLGR", s: CommunityNoLLGR.String(), want: "NO_LLGR"},
+		{name: "community reserved unnamed", s: NewCommunity(65535, 8).String(), want: "65535:8"},
 		{
 			name: "large community",
 			s:    LargeCommunity{Global: 65536, Local1: 1, Local2: 2}.String(),

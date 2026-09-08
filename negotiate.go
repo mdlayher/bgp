@@ -8,10 +8,10 @@ import (
 
 // buildOpen derives a local OPEN from the validated identity: the
 // multiprotocol capabilities from Families alone (an empty list advertises
-// none, the classic IPv4 unicast speaker), the route refresh capability when
-// configured, the graceful restart capability with the given Restart State
-// bit when configured, then the caller's capabilities verbatim. It proves the
-// result marshals before returning it.
+// none, the classic IPv4 unicast speaker), then each capability the
+// identity's own fields configure, encoded here with any per-attempt state
+// such as the graceful restart Restart State bit, then the caller's
+// capabilities verbatim. It proves the result marshals before returning it.
 func buildOpen(id Identity, restarting bool) (*Open, error) {
 	var caps []Capability
 	for _, f := range id.Families {
@@ -34,6 +34,15 @@ func buildOpen(id Identity, restarting bool) (*Open, error) {
 		}
 
 		caps = append(caps, gc)
+	}
+
+	if l := id.LongLivedGracefulRestart; l != nil {
+		lc, err := LongLivedGracefulRestartCapability(*l)
+		if err != nil {
+			return nil, err
+		}
+
+		caps = append(caps, lc)
 	}
 
 	if len(id.AddPath) > 0 {
@@ -144,14 +153,15 @@ func (f *FSM) negotiate(local, o *Open) (Session, *MessageError) {
 
 	op := o.Clone()
 	return Session{
-		Peer:            op,
-		Local:           local,
-		Families:        fams,
-		RouteRefresh:    hasCapability(op.Capabilities, CapabilityRouteRefresh),
-		ExtendedNextHop: extendedNextHopFamilies(op.Capabilities),
-		GracefulRestart: gracefulRestart(op.Capabilities),
-		AddPath:         negotiatedAddPath(f.cfg.AddPath, fams, op.Capabilities),
-		HoldTime:        min(f.cfg.HoldTime, o.HoldTime),
+		Peer:                     op,
+		Local:                    local,
+		Families:                 fams,
+		RouteRefresh:             hasCapability(op.Capabilities, CapabilityRouteRefresh),
+		ExtendedNextHop:          extendedNextHopFamilies(op.Capabilities),
+		GracefulRestart:          gracefulRestart(op.Capabilities),
+		LongLivedGracefulRestart: longLivedGracefulRestart(op.Capabilities),
+		AddPath:                  negotiatedAddPath(f.cfg.AddPath, fams, op.Capabilities),
+		HoldTime:                 min(f.cfg.HoldTime, o.HoldTime),
 	}, nil
 }
 
@@ -222,6 +232,25 @@ func gracefulRestart(caps []Capability) *GracefulRestart {
 
 		if gr, err := c.GracefulRestart(); err == nil {
 			return &gr
+		}
+	}
+
+	return nil
+}
+
+// longLivedGracefulRestart decodes the first well-formed long-lived graceful
+// restart capability in caps, or nil when there is none, exactly as
+// gracefulRestart does. It does not check that a graceful restart capability
+// accompanies it (RFC 9494, section 4.1): that pairing is the caller's RIB's
+// to honor when it decides retention.
+func longLivedGracefulRestart(caps []Capability) *LongLivedGracefulRestart {
+	for _, c := range caps {
+		if c.Code != CapabilityLongLivedGracefulRestart {
+			continue
+		}
+
+		if llgr, err := c.LongLivedGracefulRestart(); err == nil {
+			return &llgr
 		}
 	}
 
