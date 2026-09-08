@@ -1,4 +1,4 @@
-package bgprib_test
+package testrib_test
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/mdlayher/bgp"
-	"github.com/mdlayher/bgp/internal/bgprib"
+	"github.com/mdlayher/bgp/internal/testrib"
 )
 
 // The torture prefix pools: each family's churn space, disjoint from the
@@ -73,7 +73,7 @@ func TestTableTorture(t *testing.T) {
 
 	master := rand.New(rand.NewPCG(tortureSeed(t), 0))
 
-	tb := newTable(t, bgprib.Config{AfterFunc: chaosAfterFunc(t, master.Uint64())})
+	tb := newTable(t, testrib.Config{AfterFunc: chaosAfterFunc(t, master.Uint64())})
 
 	const workers, iters = 8, 60
 	peers := make([]*bgp.Peer, workers)
@@ -151,12 +151,12 @@ func TestTableTortureTCP(t *testing.T) {
 		staticB = netip.MustParsePrefix("203.0.113.2/32")
 	)
 
-	tableA := newTable(t, bgprib.Config{
+	tableA := newTable(t, testrib.Config{
 		Local:     tortureStatic(staticA),
 		AfterFunc: chaosAfterFunc(t, rng.Uint64()),
 	})
 
-	tableB := newTable(t, bgprib.Config{
+	tableB := newTable(t, testrib.Config{
 		Local:     tortureStatic(staticB),
 		AfterFunc: chaosAfterFunc(t, rng.Uint64()),
 	})
@@ -273,7 +273,7 @@ func chaosAfterFunc(t *testing.T, seed uint64) func(time.Duration, func()) func(
 
 // checkSnapshot verifies a snapshot's invariants: strictly sorted (which
 // implies unique) prefixes, each with attributes.
-func checkSnapshot(rs []bgprib.Route) error {
+func checkSnapshot(rs []testrib.Route) error {
 	for i, r := range rs {
 		if len(r.Attributes) == 0 {
 			return fmt.Errorf("route %s has no attributes", r.Prefix)
@@ -295,7 +295,7 @@ func checkSnapshot(rs []bgprib.Route) error {
 // tortureWorker drives one peer's randomized lifecycle loop. Handler calls
 // for one peer are serialized, per the documented contract; concurrency comes
 // from the other workers, the readers, and the sweep timers.
-func tortureWorker(t *testing.T, tb *bgprib.Table, p *bgp.Peer, seed uint64, iters int) {
+func tortureWorker(t *testing.T, tb *testrib.Table, p *bgp.Peer, seed uint64, iters int) {
 	rng := rand.New(rand.NewPCG(seed, 0))
 	ctx := context.Background()
 
@@ -369,7 +369,7 @@ func tortureWorker(t *testing.T, tb *bgprib.Table, p *bgp.Peer, seed uint64, ite
 // close leaves nothing, a retained close leaves only stale routes which
 // existed before it, and only in capability-listed families. A sweep firing
 // in between only deletes, so every check tolerates absence.
-func checkPostClose(t *testing.T, tb *bgprib.Table, p *bgp.Peer, gr *bgp.GracefulRestart, localN bool, cl bgp.Close, before map[bgp.Family]map[netip.Prefix]bool) bool {
+func checkPostClose(t *testing.T, tb *testrib.Table, p *bgp.Peer, gr *bgp.GracefulRestart, localN bool, cl bgp.Close, before map[bgp.Family]map[netip.Prefix]bool) bool {
 	hardReset := cl.Notification != nil &&
 		cl.Notification.Code == bgp.NotificationCease &&
 		cl.Notification.Subcode == bgp.SubcodeCeaseHardReset
@@ -564,7 +564,7 @@ func tortureClose(rng *rand.Rand) bgp.Close {
 type tortureTCPRig struct {
 	t                *testing.T
 	rng              *rand.Rand
-	tableA, tableB   *bgprib.Table
+	tableA, tableB   *testrib.Table
 	staticA, staticB netip.Prefix
 	peerA            *bgp.Peer
 	estA             <-chan struct{}
@@ -575,7 +575,7 @@ type tortureTCPRig struct {
 
 // newTortureTCPRig listens on loopback, builds and runs speaker A with a
 // random capability roll, and feeds accepted connections to it.
-func newTortureTCPRig(t *testing.T, rng *rand.Rand, tableA, tableB *bgprib.Table, staticA, staticB netip.Prefix) *tortureTCPRig {
+func newTortureTCPRig(t *testing.T, rng *rand.Rand, tableA, tableB *testrib.Table, staticA, staticB netip.Prefix) *tortureTCPRig {
 	rig := &tortureTCPRig{
 		t:       t,
 		rng:     rng,
@@ -940,7 +940,7 @@ func tortureExpect(staticP netip.Prefix, finals []churnFinal) map[bgp.Family]map
 // tortureConverged reports whether p's Adj-RIB-In in tb matches want
 // exactly: every wanted prefix present, fresh, and attributed, and nothing
 // else.
-func tortureConverged(tb *bgprib.Table, p *bgp.Peer, want map[bgp.Family]map[netip.Prefix]bool) bool {
+func tortureConverged(tb *testrib.Table, p *bgp.Peer, want map[bgp.Family]map[netip.Prefix]bool) bool {
 	for f, set := range want {
 		rs := tb.Routes(p, f)
 		if len(rs) != len(set) {

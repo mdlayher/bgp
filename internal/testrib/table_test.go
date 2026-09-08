@@ -1,4 +1,4 @@
-package bgprib_test
+package testrib_test
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/mdlayher/bgp"
-	"github.com/mdlayher/bgp/internal/bgprib"
+	"github.com/mdlayher/bgp/internal/testrib"
 )
 
 var (
@@ -43,7 +43,7 @@ func TestNewErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if _, err := bgprib.New(bgprib.Config{Local: tt.local}); err == nil {
+			if _, err := testrib.New(testrib.Config{Local: tt.local}); err == nil {
 				t.Fatal("expected an error, but none occurred")
 			}
 		})
@@ -71,7 +71,7 @@ func TestTableBest(t *testing.T) {
 		}
 	)
 
-	tb, err := bgprib.New(bgprib.Config{Local: map[bgp.Family][]*bgp.Update{
+	tb, err := testrib.New(testrib.Config{Local: map[bgp.Family][]*bgp.Update{
 		v4u: {u4},
 		v6u: {u6},
 	}})
@@ -97,7 +97,7 @@ func TestTableOnUpdate(t *testing.T) {
 
 	var (
 		ctx = context.Background()
-		tb  = newTable(t, bgprib.Config{})
+		tb  = newTable(t, testrib.Config{})
 		p   = testPeer(t)
 
 		pA = netip.MustParsePrefix("198.51.100.0/24")
@@ -272,7 +272,7 @@ func TestTableRetention(t *testing.T) {
 
 			var (
 				ctx = context.Background()
-				tb  = newTable(t, bgprib.Config{AfterFunc: (&fakeSweep{}).afterFunc})
+				tb  = newTable(t, testrib.Config{AfterFunc: (&fakeSweep{}).afterFunc})
 				p   = testPeer(t)
 			)
 
@@ -301,7 +301,7 @@ func TestTableEndOfRIBSweep(t *testing.T) {
 	var (
 		ctx = context.Background()
 		fs  = &fakeSweep{}
-		tb  = newTable(t, bgprib.Config{AfterFunc: fs.afterFunc})
+		tb  = newTable(t, testrib.Config{AfterFunc: fs.afterFunc})
 		p   = testPeer(t)
 
 		pA = netip.MustParsePrefix("198.51.100.0/24")
@@ -397,7 +397,7 @@ func TestTableForwardingNotPreserved(t *testing.T) {
 
 			var (
 				ctx = context.Background()
-				tb  = newTable(t, bgprib.Config{AfterFunc: (&fakeSweep{}).afterFunc})
+				tb  = newTable(t, testrib.Config{AfterFunc: (&fakeSweep{}).afterFunc})
 				p   = testPeer(t)
 			)
 
@@ -427,7 +427,7 @@ func TestTableRestartTimerExpiry(t *testing.T) {
 	var (
 		ctx = context.Background()
 		fs  = &fakeSweep{}
-		tb  = newTable(t, bgprib.Config{AfterFunc: fs.afterFunc})
+		tb  = newTable(t, testrib.Config{AfterFunc: fs.afterFunc})
 		p   = testPeer(t)
 	)
 
@@ -461,7 +461,7 @@ func TestTableRestartTimerLateFire(t *testing.T) {
 	var (
 		ctx = context.Background()
 		fs  = &fakeSweep{}
-		tb  = newTable(t, bgprib.Config{AfterFunc: fs.afterFunc})
+		tb  = newTable(t, testrib.Config{AfterFunc: fs.afterFunc})
 		p   = testPeer(t)
 	)
 
@@ -498,7 +498,7 @@ func TestTableAttemptCloseIgnored(t *testing.T) {
 	var (
 		ctx = context.Background()
 		fs  = &fakeSweep{}
-		tb  = newTable(t, bgprib.Config{AfterFunc: fs.afterFunc})
+		tb  = newTable(t, testrib.Config{AfterFunc: fs.afterFunc})
 		p   = testPeer(t)
 	)
 
@@ -552,13 +552,13 @@ func TestTablePeersTCP(t *testing.T) {
 		Families:            []bgp.GracefulRestartFamily{{Family: v4u, ForwardingPreserved: true}},
 	}
 
-	tableA := newTable(t, bgprib.Config{
+	tableA := newTable(t, testrib.Config{
 		Local: map[bgp.Family][]*bgp.Update{v4u: {{
 			NLRI:       []netip.Prefix{pA},
 			Attributes: attrs(t, bgp.OriginIGP, bgp.NextHop(netip.MustParseAddr("192.0.2.1"))),
 		}}},
 	})
-	tableB := newTable(t, bgprib.Config{
+	tableB := newTable(t, testrib.Config{
 		Local: map[bgp.Family][]*bgp.Update{v4u: {{
 			NLRI:       []netip.Prefix{pB},
 			Attributes: attrs(t, bgp.OriginIGP, bgp.NextHop(netip.MustParseAddr("192.0.2.2"))),
@@ -673,7 +673,7 @@ func TestTablePeersTCP(t *testing.T) {
 
 // wire is the pluggable-RIB wiring pattern: a Table attaches to a peer by assigning
 // its handler-shaped methods into the PeerConfig, and nothing else.
-func wire(tb *bgprib.Table, cfg bgp.PeerConfig) bgp.PeerConfig {
+func wire(tb *testrib.Table, cfg bgp.PeerConfig) bgp.PeerConfig {
 	cfg.OnEstablished = tb.OnEstablished
 	cfg.OnUpdate = tb.OnUpdate
 	cfg.OnRouteRefresh = tb.OnRouteRefresh
@@ -686,10 +686,10 @@ func wire(tb *bgprib.Table, cfg bgp.PeerConfig) bgp.PeerConfig {
 // pusher goroutines before the test completes. This cleanup is registered
 // first, so it runs last: every session is already dead by then, and the
 // pushers exit on their first failed send.
-func newTable(t *testing.T, cfg bgprib.Config) *bgprib.Table {
+func newTable(t *testing.T, cfg testrib.Config) *testrib.Table {
 	t.Helper()
 
-	tb, err := bgprib.New(cfg)
+	tb, err := testrib.New(cfg)
 	if err != nil {
 		t.Fatalf("failed to create Table: %v", err)
 	}
@@ -740,7 +740,7 @@ func session(localN bool, gr *bgp.GracefulRestart, families ...bgp.Family) bgp.S
 }
 
 // announce applies an UPDATE announcing one IPv4 unicast prefix.
-func announce(t *testing.T, tb *bgprib.Table, p *bgp.Peer, prefix string) {
+func announce(t *testing.T, tb *testrib.Table, p *bgp.Peer, prefix string) {
 	t.Helper()
 
 	u := &bgp.Update{
@@ -776,7 +776,7 @@ func diff[T any](tb testing.TB, want, got T) string {
 }
 
 // prefixes projects a snapshot to its prefixes.
-func prefixes(rs []bgprib.Route) []netip.Prefix {
+func prefixes(rs []testrib.Route) []netip.Prefix {
 	out := make([]netip.Prefix, 0, len(rs))
 	for _, r := range rs {
 		out = append(out, r.Prefix)

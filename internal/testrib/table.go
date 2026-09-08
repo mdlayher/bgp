@@ -1,4 +1,4 @@
-// Package bgprib is the simplest possible RIB: maps guarded by one mutex.
+// Package testrib is the simplest possible RIB: maps guarded by one mutex.
 //
 // It exists as the permanent in-tree proof that a RIB living outside the bgp
 // package can be built against the Peer boundary alone, including graceful
@@ -12,7 +12,7 @@
 // goroutine per session, fed through a dirty set with
 // families as the grain, because the static Loc-RIB makes "current truth per
 // family" the whole family. A real RIB keys the set by prefix.
-package bgprib
+package testrib
 
 import (
 	"cmp"
@@ -139,7 +139,7 @@ func New(cfg Config) (*Table, error) {
 			}
 
 			if len(ps) == 0 {
-				return nil, fmt.Errorf("bgprib: local UPDATE announces no prefixes in family %v", f)
+				return nil, fmt.Errorf("testrib: local UPDATE announces no prefixes in family %v", f)
 			}
 
 			for _, p := range ps {
@@ -168,7 +168,7 @@ func updatePrefixes(f bgp.Family, u *bgp.Update) ([]netip.Prefix, error) {
 
 		a, err := ra.Parse()
 		if err != nil {
-			return nil, fmt.Errorf("bgprib: local UPDATE for family %v: %w", f, err)
+			return nil, fmt.Errorf("testrib: local UPDATE for family %v: %w", f, err)
 		}
 
 		if m := a.(bgp.MPReachNLRI); m.Family == f {
