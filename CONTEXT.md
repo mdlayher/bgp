@@ -72,6 +72,14 @@ An UPDATE-shaped marker (RFC 4724) which signals that a speaker has
 sent its complete initial routing table for one family. A wire-level
 marker meaningful without graceful restart, not a RIB feature.
 
+**Enhanced route refresh**:
+The extension of route refresh (RFC 7313) by which a speaker brackets
+its re-advertisement of a family with the BoRR and EoRR demarcations,
+so the receiver can mark the family's routes stale at the beginning and
+sweep the ones not re-advertised at the end. Negotiated by its own
+capability; the stale marking, the sweep, and any timer bounding the
+retention are the caller's RIB's.
+
 **EVPN**:
 Ethernet VPN (RFC 7432): the L2VPN EVPN family, whose reachability
 information is typed records describing MAC/IP bindings and Ethernet

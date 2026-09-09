@@ -193,6 +193,70 @@ func TestNewFSMPinnedLocalIdentity(t *testing.T) {
 	}
 }
 
+// TestNewFSMEnhancedRouteRefresh verifies the construction rules of the
+// enhanced route refresh advertisement: the capability is generated from
+// EnhancedRouteRefresh rather than passed raw, and it requires RouteRefresh,
+// whose OnRouteRefresh receives the demarcations.
+func TestNewFSMEnhancedRouteRefresh(t *testing.T) {
+	t.Parallel()
+
+	base := func() FSMConfig {
+		return FSMConfig{
+			LocalASN: 64496,
+			LocalID:  MustParseIdentifier("192.0.2.1"),
+			Passive:  true,
+			OnRouteRefresh: func(context.Context, *FSM, *RouteRefresh) error {
+				return nil
+			},
+		}
+	}
+
+	tests := []struct {
+		name   string
+		modify func(c *FSMConfig)
+		ok     bool
+	}{
+		{
+			name: "raw capability",
+			modify: func(c *FSMConfig) {
+				c.Capabilities = []Capability{{Code: CapabilityEnhancedRouteRefresh}}
+			},
+		},
+		{
+			name: "without route refresh",
+			modify: func(c *FSMConfig) {
+				c.EnhancedRouteRefresh = true
+			},
+		},
+		{
+			name: "with route refresh",
+			modify: func(c *FSMConfig) {
+				c.RouteRefresh = true
+				c.EnhancedRouteRefresh = true
+			},
+			ok: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := base()
+			tt.modify(&c)
+
+			_, err := NewFSM(c)
+			if tt.ok && err != nil {
+				t.Fatalf("failed to build FSM: %v", err)
+			}
+
+			if !tt.ok && err == nil {
+				t.Fatal("expected an error, but none occurred")
+			}
+		})
+	}
+}
+
 // TestFSMDeliverConnUnaddressed verifies that the FSM carries no addressing
 // at all: a delivered TCP connection is accepted from any remote address,
 // because the caller's choice of FSM is the admission decision.

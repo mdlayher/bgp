@@ -184,7 +184,21 @@ func runPeerCause(t *testing.T, raddr netip.AddrPort, cfg bgp.PeerConfig) (*bgp.
 	t.Helper()
 
 	estab := make(chan bgp.Session, 1)
-	cfg.OnEstablished = func(_ context.Context, _ *bgp.Peer, s bgp.Session) error {
+	cfg.OnEstablished = func(ctx context.Context, p *bgp.Peer, s bgp.Session) error {
+		// The library speaker has no RIB, so its initial table is empty
+		// and the End-of-RIB markers are its whole initial dump: sent
+		// before the Session is handed to the scenario, so any route it
+		// announces afterward is a change, as RFC 4724, section 2
+		// recommends of every speaker. FRR relies on it: with enhanced
+		// route refresh negotiated it holds a refresh request until it
+		// has the requester's End-of-RIB for the family. Two markers are
+		// far below the hold time, so they may be sent synchronously.
+		for _, fam := range s.Families {
+			if err := p.SendUpdate(ctx, bgp.NewEndOfRIB(fam)); err != nil {
+				return err
+			}
+		}
+
 		select {
 		case estab <- s:
 		default:
@@ -231,7 +245,21 @@ func runServer(t *testing.T, raddr netip.AddrPort, cfg bgp.PeerConfig, lc bgp.Li
 	t.Helper()
 
 	estab := make(chan bgp.Session, 1)
-	cfg.OnEstablished = func(_ context.Context, _ *bgp.Peer, s bgp.Session) error {
+	cfg.OnEstablished = func(ctx context.Context, p *bgp.Peer, s bgp.Session) error {
+		// The library speaker has no RIB, so its initial table is empty
+		// and the End-of-RIB markers are its whole initial dump: sent
+		// before the Session is handed to the scenario, so any route it
+		// announces afterward is a change, as RFC 4724, section 2
+		// recommends of every speaker. FRR relies on it: with enhanced
+		// route refresh negotiated it holds a refresh request until it
+		// has the requester's End-of-RIB for the family. Two markers are
+		// far below the hold time, so they may be sent synchronously.
+		for _, fam := range s.Families {
+			if err := p.SendUpdate(ctx, bgp.NewEndOfRIB(fam)); err != nil {
+				return err
+			}
+		}
+
 		select {
 		case estab <- s:
 		default:

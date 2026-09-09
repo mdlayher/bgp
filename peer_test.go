@@ -1737,6 +1737,228 @@ func TestPeerOnRouteRefresh(t *testing.T) {
 	})
 }
 
+// TestPeerEnhancedRouteRefreshNegotiation verifies that
+// Session.EnhancedRouteRefresh is the conjunction RFC 7313 needs: the local
+// OPEN carries the capability exactly when Identity.EnhancedRouteRefresh is
+// set, and the session reports it negotiated only when the peer advertised
+// it too.
+func TestPeerEnhancedRouteRefreshNegotiation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		local, peer bool
+	}{
+		{name: "both", local: true, peer: true},
+		{name: "only local", local: true},
+		{name: "only peer", peer: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				r := newPipeRig(t, PeerConfig{
+					RouteRefresh:         true,
+					EnhancedRouteRefresh: tt.local,
+					OnRouteRefresh: func(context.Context, *Peer, *RouteRefresh) error {
+						return nil
+					},
+				})
+				s := r.acceptScript()
+
+				open := scriptOpen()
+				open.Capabilities = []Capability{{Code: CapabilityRouteRefresh}}
+				if tt.peer {
+					open.Capabilities = append(open.Capabilities, Capability{Code: CapabilityEnhancedRouteRefresh})
+				}
+
+				s.establish(open)
+
+				sess := recv(t, r.estC, "session establishment")
+				if got := hasCapability(sess.Local.Capabilities, CapabilityEnhancedRouteRefresh); got != tt.local {
+					t.Fatalf("local OPEN advertised enhanced route refresh: got %v, want %v", got, tt.local)
+				}
+
+				if want := tt.local && tt.peer; sess.EnhancedRouteRefresh != want {
+					t.Fatalf("session negotiated enhanced route refresh: got %v, want %v", sess.EnhancedRouteRefresh, want)
+				}
+			})
+		})
+	}
+}
+
+// TestPeerEnhancedRouteRefreshDelivery verifies the delivery contract of RFC
+// 7313 on a session which negotiated it: a BoRR, the UPDATE it brackets, and
+// the EoRR reach OnRouteRefresh and OnUpdate in wire order, so the caller's
+// RIB sees exactly where the peer's re-advertisement begins and ends.
+func TestPeerEnhancedRouteRefreshDelivery(t *testing.T) {
+	t.Parallel()
+
+	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+
+	synctest.Test(t, func(t *testing.T) {
+		events := make(chan string, 3)
+		r := newPipeRig(t, PeerConfig{
+			RouteRefresh:         true,
+			EnhancedRouteRefresh: true,
+			OnUpdate: func(_ context.Context, _ *Peer, u *Update) error {
+				events <- fmt.Sprintf("UPDATE %s", u.Withdrawn)
+				return nil
+			},
+			OnRouteRefresh: func(_ context.Context, _ *Peer, rr *RouteRefresh) error {
+				events <- fmt.Sprintf("%s %s", rr.Subtype, rr.Family)
+				return nil
+			},
+		})
+		s := r.acceptScript()
+
+		open := scriptOpen()
+		open.Capabilities = []Capability{
+			{Code: CapabilityRouteRefresh},
+			{Code: CapabilityEnhancedRouteRefresh},
+		}
+		s.establish(open)
+
+		if sess := recv(t, r.estC, "session establishment"); !sess.EnhancedRouteRefresh {
+			t.Fatal("expected enhanced route refresh to be negotiated")
+		}
+
+		withdrawn := netip.MustParsePrefix("198.51.100.0/24")
+		s.write(&RouteRefresh{Family: v4u, Subtype: RouteRefreshBegin})
+		s.write(&Update{Withdrawn: []netip.Prefix{withdrawn}})
+		s.write(&RouteRefresh{Family: v4u, Subtype: RouteRefreshEnd})
+
+		want := []string{
+			"BoRR " + v4u.String(),
+			fmt.Sprintf("UPDATE [%s]", withdrawn),
+			"EoRR " + v4u.String(),
+		}
+		for _, w := range want {
+			if got := recv(t, events, "delivery"); got != w {
+				t.Fatalf("unexpected delivery: got %q, want %q", got, w)
+			}
+		}
+
+		select {
+		case c := <-r.closeC:
+			t.Fatalf("session closed unexpectedly: %+v", c)
+		default:
+		}
+	})
+}
+
+// TestPeerEnhancedRouteRefreshIgnored verifies the receive-side gates: a
+// demarcation on a session which did not negotiate enhanced route refresh
+// is not delivered (RFC 7313, section 4 scopes the procedures to a received
+// capability, and this package requires its own advertisement too), and a
+// subtype outside the assigned three is ignored on a session which did
+// (section 5). Neither ends the session, and a normal request sent after
+// each is delivered in turn, proving the drop.
+func TestPeerEnhancedRouteRefreshIgnored(t *testing.T) {
+	t.Parallel()
+
+	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+	v6u := Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+
+	tests := []struct {
+		name    string
+		peerCap bool
+		ignored RouteRefreshSubtype
+	}{
+		{name: "unnegotiated BoRR", ignored: RouteRefreshBegin},
+		{name: "unnegotiated EoRR", ignored: RouteRefreshEnd},
+		{name: "unassigned subtype", peerCap: true, ignored: 200},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				rrC := make(chan *RouteRefresh, 2)
+				r := newPipeRig(t, PeerConfig{
+					RouteRefresh:         true,
+					EnhancedRouteRefresh: true,
+					OnRouteRefresh: func(_ context.Context, _ *Peer, rr *RouteRefresh) error {
+						rrC <- rr
+						return nil
+					},
+				})
+				s := r.acceptScript()
+
+				open := scriptOpen()
+				open.Capabilities = []Capability{{Code: CapabilityRouteRefresh}}
+				if tt.peerCap {
+					open.Capabilities = append(open.Capabilities, Capability{Code: CapabilityEnhancedRouteRefresh})
+				}
+
+				s.establish(open)
+				recv(t, r.estC, "session establishment")
+
+				// The ignored message first, then a request for a different
+				// family: handlers run in wire order, so the request arriving
+				// first proves the other was dropped rather than delayed.
+				s.write(&RouteRefresh{Family: v4u, Subtype: tt.ignored})
+				s.write(&RouteRefresh{Family: v6u})
+
+				want := &RouteRefresh{Family: v6u}
+				if d := diff(t, want, recv(t, rrC, "route refresh hook")); d != "" {
+					t.Fatalf("unexpected ROUTE-REFRESH (-want +got):\n%s", d)
+				}
+
+				select {
+				case c := <-r.closeC:
+					t.Fatalf("session closed unexpectedly: %+v", c)
+				default:
+				}
+			})
+		})
+	}
+}
+
+// TestPeerRouteRefreshReservedByteDelivered verifies the RFC 2918 regime:
+// on a session which did not negotiate enhanced route refresh, the subtype
+// byte is the reserved byte the receiver ignores, so a ROUTE-REFRESH
+// carrying an unassigned value there is delivered as a request, with the
+// byte preserved in Subtype for the caller to see.
+func TestPeerRouteRefreshReservedByteDelivered(t *testing.T) {
+	t.Parallel()
+
+	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+
+	synctest.Test(t, func(t *testing.T) {
+		rrC := make(chan *RouteRefresh, 1)
+		r := newPipeRig(t, PeerConfig{
+			RouteRefresh:         true,
+			EnhancedRouteRefresh: true,
+			OnRouteRefresh: func(_ context.Context, _ *Peer, rr *RouteRefresh) error {
+				rrC <- rr
+				return nil
+			},
+		})
+		s := r.acceptScript()
+
+		open := scriptOpen()
+		open.Capabilities = []Capability{{Code: CapabilityRouteRefresh}}
+		s.establish(open)
+		recv(t, r.estC, "session establishment")
+
+		want := &RouteRefresh{Family: v4u, Subtype: 7}
+		s.write(want)
+		if d := diff(t, want, recv(t, rrC, "route refresh hook")); d != "" {
+			t.Fatalf("unexpected ROUTE-REFRESH (-want +got):\n%s", d)
+		}
+
+		select {
+		case c := <-r.closeC:
+			t.Fatalf("session closed unexpectedly: %+v", c)
+		default:
+		}
+	})
+}
+
 // TestPeerOnUpdateOwnsValues verifies the Peer layer's defining behavior:
 // the caller's OnUpdate receives a deep copy detached from the borrowed
 // value the FSM delivered, safe to retain after the underlying buffer is

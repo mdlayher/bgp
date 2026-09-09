@@ -22,6 +22,10 @@ func buildOpen(id Identity, restarting bool) (*Open, error) {
 		caps = append(caps, Capability{Code: CapabilityRouteRefresh})
 	}
 
+	if id.EnhancedRouteRefresh {
+		caps = append(caps, Capability{Code: CapabilityEnhancedRouteRefresh})
+	}
+
 	if g := id.GracefulRestart; g != nil {
 		gc, err := GracefulRestartCapability(GracefulRestart{
 			Restarting:          restarting,
@@ -157,6 +161,7 @@ func (f *FSM) negotiate(local, o *Open) (Session, *MessageError) {
 		Local:                    local,
 		Families:                 fams,
 		RouteRefresh:             hasCapability(op.Capabilities, CapabilityRouteRefresh),
+		EnhancedRouteRefresh:     f.cfg.EnhancedRouteRefresh && hasCapability(op.Capabilities, CapabilityEnhancedRouteRefresh),
 		ExtendedNextHop:          extendedNextHopFamilies(op.Capabilities),
 		GracefulRestart:          gracefulRestart(op.Capabilities),
 		LongLivedGracefulRestart: longLivedGracefulRestart(op.Capabilities),

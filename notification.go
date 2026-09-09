@@ -12,12 +12,13 @@ type NotificationCode uint8
 
 // NotificationCode values, as assigned by IANA.
 const (
-	NotificationMessageHeaderError NotificationCode = 1
-	NotificationOpenMessageError   NotificationCode = 2
-	NotificationUpdateMessageError NotificationCode = 3
-	NotificationHoldTimerExpired   NotificationCode = 4
-	NotificationFSMError           NotificationCode = 5
-	NotificationCease              NotificationCode = 6
+	NotificationMessageHeaderError       NotificationCode = 1
+	NotificationOpenMessageError         NotificationCode = 2
+	NotificationUpdateMessageError       NotificationCode = 3
+	NotificationHoldTimerExpired         NotificationCode = 4
+	NotificationFSMError                 NotificationCode = 5
+	NotificationCease                    NotificationCode = 6
+	NotificationRouteRefreshMessageError NotificationCode = 7
 )
 
 // String returns the name of a NotificationCode.
@@ -35,6 +36,8 @@ func (c NotificationCode) String() string {
 		return "Finite State Machine Error"
 	case NotificationCease:
 		return "Cease"
+	case NotificationRouteRefreshMessageError:
+		return "ROUTE-REFRESH Message Error"
 	default:
 		return fmt.Sprintf("unknown(%d)", uint8(c))
 	}

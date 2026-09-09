@@ -1,6 +1,7 @@
 package bgp
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 	"time"
@@ -620,6 +621,53 @@ func TestLongLivedGracefulRestartCapabilityErrors(t *testing.T) {
 		} else {
 			t.Logf("err: %v", err)
 		}
+	}
+}
+
+// TestEnhancedRouteRefreshCapability pins the enhanced route refresh
+// capability's wire form (RFC 7313, section 3.1): code 70 with a zero
+// length, built as a bare Capability like route refresh, and detected after
+// a wire round trip by hasCapability with no data to decode.
+func TestEnhancedRouteRefreshCapability(t *testing.T) {
+	t.Parallel()
+
+	o := &Open{
+		ASN:      64496,
+		HoldTime: 90 * time.Second,
+		ID:       MustParseIdentifier("192.0.2.1"),
+		Capabilities: []Capability{
+			{Code: CapabilityRouteRefresh},
+			{Code: CapabilityEnhancedRouteRefresh},
+		},
+	}
+
+	b, err := o.AppendBinary(nil)
+	if err != nil {
+		t.Fatalf("failed to marshal OPEN: %v", err)
+	}
+
+	// The two capabilities are the final bytes of the OPEN, each a code
+	// and a zero length.
+	if want := []byte{0x02, 0x00, 0x46, 0x00}; !bytes.HasSuffix(b, want) {
+		t.Fatalf("unexpected OPEN capability bytes: want suffix % x, got % x", want, b)
+	}
+
+	m, err := ParseMessage(b)
+	if err != nil {
+		t.Fatalf("failed to parse OPEN: %v", err)
+	}
+
+	got, ok := m.(*Open)
+	if !ok {
+		t.Fatalf("expected an OPEN, but got: %T", m)
+	}
+
+	if d := diff(t, o.Capabilities, got.Capabilities); d != "" {
+		t.Fatalf("unexpected capabilities (-want +got):\n%s", d)
+	}
+
+	if !hasCapability(got.Capabilities, CapabilityEnhancedRouteRefresh) {
+		t.Fatal("enhanced route refresh capability was not detected")
 	}
 }
 

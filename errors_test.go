@@ -18,6 +18,7 @@ func TestNotificationCodeString(t *testing.T) {
 		{code: NotificationHoldTimerExpired, want: "Hold Timer Expired"},
 		{code: NotificationFSMError, want: "Finite State Machine Error"},
 		{code: NotificationCease, want: "Cease"},
+		{code: NotificationRouteRefreshMessageError, want: "ROUTE-REFRESH Message Error"},
 		{code: NotificationCode(255), want: "unknown(255)"},
 	}
 
@@ -56,6 +57,29 @@ func TestSubcodeStringCease(t *testing.T) {
 			t.Parallel()
 
 			if got := subcodeString(NotificationCease, tt.subcode); got != tt.want {
+				t.Fatalf("unexpected string: got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSubcodeStringRouteRefresh(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		subcode uint8
+		want    string
+	}{
+		{subcode: SubcodeInvalidMessageLength, want: "Invalid Message Length"},
+		{subcode: 0, want: "Unspecific"},
+		{subcode: 2, want: "unknown(2)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
+
+			if got := subcodeString(NotificationRouteRefreshMessageError, tt.subcode); got != tt.want {
 				t.Fatalf("unexpected string: got %q, want %q", got, tt.want)
 			}
 		})

@@ -260,6 +260,10 @@ func (f *FSM) readSession(fc *fsmConn) {
 				return
 			}
 		case *RouteRefresh:
+			if !f.acceptsRouteRefresh(fc, m) {
+				continue
+			}
+
 			if h := f.cfg.OnRouteRefresh; h != nil && !handle(func() error { return h(fc.sessCtx, f, m) }) {
 				return
 			}
@@ -269,6 +273,38 @@ func (f *FSM) readSession(fc *fsmConn) {
 			f.forward(fc, connEvent{fc: fc, msg: m})
 			return
 		}
+	}
+}
+
+// acceptsRouteRefresh reports whether a received ROUTE-REFRESH is delivered
+// to OnRouteRefresh. There are two regimes. On a session which negotiated
+// enhanced route refresh, RFC 7313 governs: a request and both
+// demarcations are delivered, and any other subtype is ignored, as section
+// 5 requires. On any other session, RFC 2918 governs: the subtype byte is
+// its reserved byte, ignored by the receiver, so a message is delivered as
+// a request with the byte carried as received. The exception is the two
+// demarcations, which are not delivered on such a session: RFC 7313,
+// section 4 scopes its procedures to having received the capability from
+// the peer, and this package adds its own advertisement to the condition,
+// since a caller which did not advertise has not promised to act on them.
+// An ignored message is logged, as RFC 7313 recommends, and the session
+// continues.
+func (f *FSM) acceptsRouteRefresh(fc *fsmConn, r *RouteRefresh) bool {
+	switch {
+	case r.Subtype == RouteRefreshRequest:
+		return true
+	case fc.sess.EnhancedRouteRefresh && r.Subtype.demarcation():
+		return true
+	case fc.sess.EnhancedRouteRefresh:
+		f.log.Info("ignoring ROUTE-REFRESH with an unassigned subtype",
+			"subtype", r.Subtype, "family", r.Family)
+		return false
+	case r.Subtype.demarcation():
+		f.log.Info("ignoring ROUTE-REFRESH demarcation: enhanced route refresh was not negotiated",
+			"subtype", r.Subtype, "family", r.Family)
+		return false
+	default:
+		return true
 	}
 }
 

@@ -227,6 +227,7 @@ const (
 	CapabilityGracefulRestart          CapabilityCode = 64
 	CapabilityFourOctetAS              CapabilityCode = 65
 	CapabilityAddPath                  CapabilityCode = 69
+	CapabilityEnhancedRouteRefresh     CapabilityCode = 70
 	CapabilityLongLivedGracefulRestart CapabilityCode = 71
 	CapabilityFQDN                     CapabilityCode = 73
 )

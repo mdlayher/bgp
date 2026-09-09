@@ -248,7 +248,10 @@ func TestFRRGracefulRestart(t *testing.T) {
 	}
 }
 
-// Scenario 8: route refresh in both directions.
+// Scenario 8: route refresh in both directions, with only RFC 2918
+// advertised. FRR advertises enhanced route refresh unilaterally, so this is
+// also the unnegotiated regime for real: the session reports it absent, any
+// demarcation FRR sends is dropped, and its re-advertisement arrives plain.
 func TestFRRRouteRefresh(t *testing.T) {
 	f := startFRR(t, frrConfig{
 		ASN:        frrASN,
@@ -257,7 +260,7 @@ func TestFRRRouteRefresh(t *testing.T) {
 		NetworksV4: []netip.Prefix{prefixV4A},
 	})
 
-	refreshes := make(chan bgp.Family, 4)
+	refreshes := make(chan bgp.RouteRefresh, 4)
 	handler, routes := collectRoutes()
 	p, estab := runPeer(t, netip.AddrPortFrom(f.Addr, bgp.Port), bgp.PeerConfig{
 		LocalASN: libASN,
@@ -269,7 +272,7 @@ func TestFRRRouteRefresh(t *testing.T) {
 		RouteRefresh: true,
 		OnUpdate:     handler,
 		OnRouteRefresh: func(_ context.Context, _ *bgp.Peer, r *bgp.RouteRefresh) error {
-			refreshes <- r.Family
+			refreshes <- *r
 			return nil
 		},
 	})
@@ -279,10 +282,17 @@ func TestFRRRouteRefresh(t *testing.T) {
 		t.Fatal("FRR did not advertise route refresh")
 	}
 
-	// Initial advertisement, then ours again after SendRouteRefresh:
-	// FRR re-sends its table on request.
-	awaitRoute(t, routes, prefixV4A)
+	if s.EnhancedRouteRefresh {
+		t.Fatal("enhanced route refresh negotiated without local advertisement")
+	}
 
+	// Initial advertisement, then FRR's own requests: about a second after
+	// establishment it asks for a refresh of each family, so the later
+	// assertions are about the messages this scenario provokes.
+	awaitRoute(t, routes, prefixV4A)
+	awaitFRRRefreshRequests(t, refreshes)
+
+	// Ours again after SendRouteRefresh: FRR re-sends its table on request.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := p.SendRouteRefresh(ctx, v4Unicast); err != nil {
@@ -296,14 +306,69 @@ func TestFRRRouteRefresh(t *testing.T) {
 		t.Fatalf("failed to soft clear: %v", err)
 	}
 
-	select {
-	case family := <-refreshes:
-		if family != v4Unicast {
-			t.Errorf("unexpected refreshed family: got %v, want %v", family, v4Unicast)
-		}
-	case <-time.After(settleTimeout):
-		t.Fatal("timed out waiting for FRR's route refresh request")
+	awaitRefresh(t, refreshes, v4Unicast, bgp.RouteRefreshRequest)
+}
+
+// Scenario 11: enhanced route refresh (RFC 7313) negotiated with FRR. FRR
+// brackets its re-advertisement with BoRR and EoRR, delivered in order
+// around the routes, and its own refresh request still arrives plain.
+func TestFRREnhancedRouteRefresh(t *testing.T) {
+	f := startFRR(t, frrConfig{
+		ASN:        frrASN,
+		RouterID:   frrRouterID,
+		Neighbors:  []frrNeighbor{{Addr: hostAddr4, ASN: libASN}},
+		NetworksV4: []netip.Prefix{prefixV4A},
+	})
+
+	refreshes := make(chan bgp.RouteRefresh, 4)
+	handler, routes := collectRoutes()
+	p, estab := runPeer(t, netip.AddrPortFrom(f.Addr, bgp.Port), bgp.PeerConfig{
+		LocalASN: libASN,
+		LocalID:  libID,
+		PeerASN:  frrASN,
+		Families: families,
+		// Enhanced route refresh extends route refresh, and both are
+		// paired with the handler which keeps their promises.
+		RouteRefresh:         true,
+		EnhancedRouteRefresh: true,
+		OnUpdate:             handler,
+		OnRouteRefresh: func(_ context.Context, _ *bgp.Peer, r *bgp.RouteRefresh) error {
+			refreshes <- *r
+			return nil
+		},
+	})
+	s := awaitSession(t, estab)
+
+	if !s.EnhancedRouteRefresh {
+		t.Fatal("FRR did not advertise enhanced route refresh")
 	}
+
+	// Initial advertisement, then FRR's own requests for each family.
+	awaitRoute(t, routes, prefixV4A)
+	awaitFRRRefreshRequests(t, refreshes)
+
+	// Ours after SendRouteRefresh: FRR re-sends its table on request,
+	// between a BoRR and an EoRR. It answers only because the harness
+	// sent End-of-RIB at establishment: with enhanced route refresh
+	// negotiated, FRR holds a request until it has the requester's
+	// marker for the family, keeping the RFC 7313, section 4 order of
+	// End-of-RIB before BoRR.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := p.SendRouteRefresh(ctx, v4Unicast); err != nil {
+		t.Fatalf("failed to send route refresh: %v", err)
+	}
+
+	awaitRefresh(t, refreshes, v4Unicast, bgp.RouteRefreshBegin)
+	awaitRoute(t, routes, prefixV4A)
+	awaitRefresh(t, refreshes, v4Unicast, bgp.RouteRefreshEnd)
+
+	// The reverse: a soft clear makes FRR request a refresh from us.
+	if err := f.vtysh(t, "clear bgp ipv4 unicast * soft in", nil); err != nil {
+		t.Fatalf("failed to soft clear: %v", err)
+	}
+
+	awaitRefresh(t, refreshes, v4Unicast, bgp.RouteRefreshRequest)
 }
 
 // collectCloses installs an OnClose hook in cfg, delivering each
@@ -355,4 +420,31 @@ func (f *frr) awaitNotified(t *testing.T, addr netip.Addr, codeSubcode string) f
 	})
 
 	return n
+}
+
+// awaitRefresh waits for the next ROUTE-REFRESH FRR sent and asserts its
+// family and subtype.
+func awaitRefresh(t *testing.T, refreshes <-chan bgp.RouteRefresh, fam bgp.Family, want bgp.RouteRefreshSubtype) {
+	t.Helper()
+
+	select {
+	case r := <-refreshes:
+		if r.Subtype != want || r.Family != fam {
+			t.Fatalf("unexpected ROUTE-REFRESH: got %s %v, want %s %v", r.Subtype, r.Family, want, fam)
+		}
+	case <-time.After(settleTimeout):
+		t.Fatalf("timed out waiting for FRR's %s %v", want, fam)
+	}
+}
+
+// awaitFRRRefreshRequests consumes the refresh requests FRR sends for each
+// negotiated family about a second after establishment, when it applies the
+// neighbor's inbound policy, so a scenario's later assertions see only the
+// messages it provoked.
+func awaitFRRRefreshRequests(t *testing.T, refreshes <-chan bgp.RouteRefresh) {
+	t.Helper()
+
+	for _, fam := range families {
+		awaitRefresh(t, refreshes, fam, bgp.RouteRefreshRequest)
+	}
 }

@@ -91,6 +91,17 @@ type Session struct {
 	// capability (RFC 2918).
 	RouteRefresh bool
 
+	// EnhancedRouteRefresh reports whether both speakers advertised the
+	// enhanced route refresh capability (RFC 7313), so the BoRR and EoRR
+	// demarcations may be sent and are delivered to OnRouteRefresh. The
+	// procedures they drive are the caller's RIB's, exactly as
+	// RouteRefresh leaves re-advertisement to the caller: bracketing each
+	// re-advertisement with the demarcations, marking a family's routes
+	// from the peer stale between its BoRR and EoRR, sweeping the routes
+	// still stale at EoRR, any stale-path timer bounding that retention,
+	// and the ordering against graceful restart's End-of-RIB.
+	EnhancedRouteRefresh bool
+
 	// ExtendedNextHop lists the families the peer accepts IPv6 next hops
 	// for (RFC 8950). Nothing in this package reads it: it is the caller's
 	// input for deciding whether to advertise a family's routes with an

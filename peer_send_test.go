@@ -166,6 +166,90 @@ func TestPeerSendRouteRefreshUnnegotiated(t *testing.T) {
 	})
 }
 
+// TestPeerSendRouteRefreshDemarcations verifies the RFC 7313 send gate: a
+// BoRR or EoRR is refused locally on a session which did not negotiate
+// enhanced route refresh, and reaches the wire with its subtype on one
+// which did.
+func TestPeerSendRouteRefreshDemarcations(t *testing.T) {
+	t.Parallel()
+
+	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+
+	// The peer advertises plain route refresh in both cases; only the
+	// enhanced capability varies.
+	establish := func(t *testing.T, enhanced bool) (*peerRig, *script) {
+		t.Helper()
+
+		r := newPipeRig(t, PeerConfig{
+			RouteRefresh:         true,
+			EnhancedRouteRefresh: true,
+			OnRouteRefresh: func(context.Context, *Peer, *RouteRefresh) error {
+				return nil
+			},
+		})
+		s := r.acceptScript()
+
+		open := scriptOpen()
+		open.Capabilities = []Capability{{Code: CapabilityRouteRefresh}}
+		if enhanced {
+			open.Capabilities = append(open.Capabilities, Capability{Code: CapabilityEnhancedRouteRefresh})
+		}
+
+		s.establish(open)
+		recv(t, r.estC, "session establishment")
+		return r, s
+	}
+
+	sends := []struct {
+		name    string
+		send    func(p *Peer) error
+		subtype RouteRefreshSubtype
+	}{
+		{
+			name:    "BoRR",
+			send:    func(p *Peer) error { return p.SendRouteRefreshBegin(context.Background(), v4u) },
+			subtype: RouteRefreshBegin,
+		},
+		{
+			name:    "EoRR",
+			send:    func(p *Peer) error { return p.SendRouteRefreshEnd(context.Background(), v4u) },
+			subtype: RouteRefreshEnd,
+		},
+	}
+
+	t.Run("unnegotiated", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			r, _ := establish(t, false)
+			for _, tt := range sends {
+				err := tt.send(r.p)
+				if err == nil || errors.Is(err, ErrNotEstablished) {
+					t.Fatalf("expected a negotiation error sending %s, but got: %v", tt.name, err)
+				}
+			}
+		})
+	})
+
+	t.Run("negotiated", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			r, s := establish(t, true)
+			for _, tt := range sends {
+				if err := tt.send(r.p); err != nil {
+					t.Fatalf("failed to send %s: %v", tt.name, err)
+				}
+
+				want := &RouteRefresh{Family: v4u, Subtype: tt.subtype}
+				if d := diff[Message](t, want, s.read()); d != "" {
+					t.Fatalf("unexpected %s (-want +got):\n%s", tt.name, d)
+				}
+			}
+		})
+	})
+}
+
 // TestPeerSendMarshalError verifies error classification by origin: a
 // message which fails to marshal returns its error to the caller alone,
 // and the session stays healthy for the next send.

@@ -50,6 +50,14 @@ const (
 	SubcodeUnexpectedMessageEstablished uint8 = 3
 )
 
+// ROUTE-REFRESH Message Error subcodes, as described in RFC 7313, section 5.
+// These values are carried by a Notification with Code
+// NotificationRouteRefreshMessageError, and report a BoRR or EoRR
+// demarcation whose length is not that of a ROUTE-REFRESH message.
+const (
+	SubcodeInvalidMessageLength uint8 = 1
+)
+
 // Cease subcodes, as described in RFC 4486, plus Hard Reset (RFC 8538) and
 // BFD Down (RFC 9384). These values are carried by a Notification with Code
 // NotificationCease. Hard Reset instructs a graceful restart helper to flush
@@ -133,6 +141,12 @@ func updateError(subcode uint8, data []byte, format string, a ...any) *MessageEr
 	return newMessageError(NotificationUpdateMessageError, subcode, data, format, a...)
 }
 
+// routeRefreshError produces a *MessageError for a ROUTE-REFRESH Message
+// Error condition, as described in RFC 7313, section 5.
+func routeRefreshError(subcode uint8, data []byte, format string, a ...any) *MessageError {
+	return newMessageError(NotificationRouteRefreshMessageError, subcode, data, format, a...)
+}
+
 // badLength produces a *MessageError reporting that a message's header length
 // field is invalid for the message's type. Per RFC 4271, section 6.1, the
 // erroneous length field is echoed back to the peer as diagnostic data.
@@ -207,6 +221,10 @@ func subcodeString(code NotificationCode, subcode uint8) string {
 			return "Receive Unexpected Message in OpenConfirm State"
 		case SubcodeUnexpectedMessageEstablished:
 			return "Receive Unexpected Message in Established State"
+		}
+	case NotificationRouteRefreshMessageError:
+		if subcode == SubcodeInvalidMessageLength {
+			return "Invalid Message Length"
 		}
 	case NotificationCease:
 		switch subcode {

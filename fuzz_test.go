@@ -34,6 +34,8 @@ func FuzzParseMessage(f *testing.F) {
 		},
 		&Notification{Code: NotificationCease, Subcode: 2, Data: []byte{0x01}},
 		&RouteRefresh{Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast}},
+		&RouteRefresh{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, Subtype: RouteRefreshBegin},
+		&RouteRefresh{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, Subtype: RouteRefreshEnd},
 	}
 
 	for _, m := range seeds {
@@ -275,6 +277,8 @@ func FuzzReadMessage(f *testing.F) {
 		},
 		&Notification{Code: NotificationCease, Subcode: 2, Data: []byte{0x01}},
 		&RouteRefresh{Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast}},
+		&RouteRefresh{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, Subtype: RouteRefreshBegin},
+		&RouteRefresh{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, Subtype: RouteRefreshEnd},
 	}
 
 	var all []byte

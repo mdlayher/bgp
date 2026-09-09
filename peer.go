@@ -111,6 +111,12 @@ type PeerConfig struct {
 	// the route refresh capability requires this handler; see
 	// Identity.RouteRefresh.
 	//
+	// RouteRefresh.Subtype distinguishes a request from the BoRR and
+	// EoRR demarcations of RFC 7313, delivered in wire order around the
+	// UPDATEs they bracket, and only on a session which negotiated the
+	// enhanced route refresh capability; the delivery rules are
+	// [FSMConfig.OnRouteRefresh]'s.
+	//
 	// See [PeerConfig.OnEstablished] for the full handler contract.
 	OnRouteRefresh func(ctx context.Context, p *Peer, r *RouteRefresh) error
 
@@ -521,6 +527,20 @@ func (p *Peer) SendUpdate(ctx context.Context, u *Update) error {
 // established session. The contract is [FSM.SendRouteRefresh]'s.
 func (p *Peer) SendRouteRefresh(ctx context.Context, f Family) error {
 	return p.fsm.SendRouteRefresh(ctx, f)
+}
+
+// SendRouteRefreshBegin sends a BoRR demarcation (RFC 7313) on the
+// established session, refusing when enhanced route refresh was not
+// negotiated. The contract is [FSM.SendRouteRefreshBegin]'s.
+func (p *Peer) SendRouteRefreshBegin(ctx context.Context, f Family) error {
+	return p.fsm.SendRouteRefreshBegin(ctx, f)
+}
+
+// SendRouteRefreshEnd sends an EoRR demarcation (RFC 7313) on the
+// established session, refusing when enhanced route refresh was not
+// negotiated. The contract is [FSM.SendRouteRefreshEnd]'s.
+func (p *Peer) SendRouteRefreshEnd(ctx context.Context, f Family) error {
+	return p.fsm.SendRouteRefreshEnd(ctx, f)
 }
 
 // ResetSession ends the established session with a NOTIFICATION: the bounce.

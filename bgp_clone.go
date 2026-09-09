@@ -128,7 +128,8 @@ func (src *RouteRefresh) Clone() *RouteRefresh {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _RouteRefreshCloneNeedsRegeneration = RouteRefresh(struct {
-	Family Family
+	Family  Family
+	Subtype RouteRefreshSubtype
 }{})
 
 // Clone makes a deep copy of GracefulRestartConfig.

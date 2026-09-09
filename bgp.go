@@ -191,7 +191,7 @@ func parseMessage(b []byte, addPath []Family) (Message, error) {
 
 		m = &Keepalive{}
 	case MessageTypeRouteRefresh:
-		m, err = parseRouteRefresh(body)
+		m, err = parseRouteRefresh(b)
 	default:
 		return nil, headerError(SubcodeBadMessageType, b[headerLen-1:headerLen],
 			"unknown message type %d", uint8(typ))

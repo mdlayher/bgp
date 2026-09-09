@@ -106,6 +106,19 @@ type Identity struct {
 	// advertisement, which gates SendRouteRefresh.
 	RouteRefresh bool
 
+	// EnhancedRouteRefresh advertises the enhanced route refresh
+	// capability (RFC 7313): a promise that this speaker brackets each
+	// re-advertisement of a family's routes with the BoRR and EoRR
+	// demarcations, and acts on the peer's. The demarcations are
+	// ROUTE-REFRESH messages, so EnhancedRouteRefresh requires
+	// RouteRefresh, and with it OnRouteRefresh, which receives them.
+	// Session.EnhancedRouteRefresh reports whether both speakers
+	// advertised it, which gates SendRouteRefreshBegin and
+	// SendRouteRefreshEnd. Sending the demarcations around a
+	// re-advertisement, marking routes stale between the peer's, and any
+	// stale-path timer are the caller's RIB's.
+	EnhancedRouteRefresh bool
+
 	// GracefulRestart, if set, advertises the graceful restart capability
 	// (RFC 4724, with the RFC 8538 N bit). It must not also appear in
 	// Capabilities: the Restart State bit varies per session attempt, so
@@ -214,6 +227,24 @@ type FSMConfig struct {
 	// asks this speaker to re-advertise a family's routes. Advertising
 	// the route refresh capability requires this handler; see
 	// Identity.RouteRefresh.
+	//
+	// RouteRefresh.Subtype distinguishes a request from the BoRR and
+	// EoRR demarcations of RFC 7313, which arrive on this handler in
+	// wire order, so the handler sees them bracket the UPDATEs delivered
+	// to OnUpdate between them. What is delivered depends on the session.
+	// On one which negotiated enhanced route refresh
+	// (Session.EnhancedRouteRefresh), RFC 7313 governs: requests and both
+	// demarcations are delivered, and a subtype other than those three is
+	// ignored, as section 5 requires. On any other session, RFC 2918
+	// governs: the subtype byte is its reserved byte, ignored by the
+	// receiver, so a message with any other value is delivered as a
+	// request with Subtype carried as received. The exception is the two
+	// demarcations, which are not delivered on such a session. RFC 7313,
+	// section 4 scopes its procedures to having received the capability
+	// from the peer; this package also requires its own advertisement,
+	// since a caller which did not advertise has not promised to act on
+	// them. Ignored messages are logged. Marking routes stale on BoRR and
+	// sweeping them on EoRR is the caller's RIB's.
 	//
 	// See [FSMConfig.OnEstablished] for the full handler contract.
 	OnRouteRefresh func(ctx context.Context, f *FSM, r *RouteRefresh) error
@@ -370,13 +401,13 @@ type FSM struct {
 	established atomic.Pointer[fsmConn]
 }
 
-// [ErrNotEstablished] is returned by SendUpdate and SendRouteRefresh when there
-// is no established session, and wrapped (per errors.Is) in the error of a
-// send whose connection write failed, since that failure ends the session. It
-// is the only session state a caller observes directly: a route pusher winds
-// down on it, and the next session's OnEstablished starts a fresh one. A
-// message which fails to marshal returns its error alone, without
-// [ErrNotEstablished]: the session is unaffected.
+// [ErrNotEstablished] is returned by SendUpdate and the SendRouteRefresh
+// methods when there is no established session, and wrapped (per errors.Is)
+// in the error of a send whose connection write failed, since that failure
+// ends the session. It is the only session state a caller observes directly:
+// a route pusher winds down on it, and the next session's OnEstablished
+// starts a fresh one. A message which fails to marshal returns its error
+// alone, without [ErrNotEstablished]: the session is unaffected.
 var ErrNotEstablished = errors.New("bgp: session is not established")
 
 // errFSMIdle is DeliverConn's refusal while the FSM is in Idle: no Connect
@@ -433,6 +464,8 @@ func NewFSM(c FSMConfig) (*FSM, error) {
 			return nil, errors.New("bgp: the long-lived graceful restart capability is generated from LongLivedGracefulRestart and must not be set")
 		case CapabilityRouteRefresh:
 			return nil, errors.New("bgp: the route refresh capability is generated from RouteRefresh and must not be set")
+		case CapabilityEnhancedRouteRefresh:
+			return nil, errors.New("bgp: the enhanced route refresh capability is generated from EnhancedRouteRefresh and must not be set")
 		case CapabilityAddPath:
 			return nil, errors.New("bgp: the add-path capability is generated from AddPath and must not be set")
 		}
@@ -440,6 +473,10 @@ func NewFSM(c FSMConfig) (*FSM, error) {
 
 	if c.RouteRefresh && c.OnRouteRefresh == nil {
 		return nil, errors.New("bgp: RouteRefresh promises to re-advertise routes and requires OnRouteRefresh to keep it")
+	}
+
+	if c.EnhancedRouteRefresh && !c.RouteRefresh {
+		return nil, errors.New("bgp: EnhancedRouteRefresh extends route refresh and requires RouteRefresh")
 	}
 
 	// The configuration is retained beyond this call; snapshot the slices so
@@ -678,6 +715,43 @@ func (f *FSM) SendRouteRefresh(ctx context.Context, fam Family) error {
 	}
 
 	return f.send(ctx, fc, &RouteRefresh{Family: fam})
+}
+
+// SendRouteRefreshBegin sends a BoRR demarcation (RFC 7313) on the
+// established session: a ROUTE-REFRESH message whose Subtype is
+// RouteRefreshBegin, announcing that a re-advertisement of this speaker's
+// routes for the given family follows. The session must have negotiated
+// the enhanced route refresh capability, reported by
+// Session.EnhancedRouteRefresh; SendRouteRefreshBegin returns an error
+// rather than send an unnegotiated demarcation. Its blocking and ordering
+// behavior is SendUpdate's, so a BoRR, the re-advertisement's UPDATEs, and
+// the EoRR sent in turn from one goroutine reach the peer in that order.
+func (f *FSM) SendRouteRefreshBegin(ctx context.Context, fam Family) error {
+	return f.sendDemarcation(ctx, fam, RouteRefreshBegin)
+}
+
+// SendRouteRefreshEnd sends an EoRR demarcation (RFC 7313) on the
+// established session: a ROUTE-REFRESH message whose Subtype is
+// RouteRefreshEnd, announcing that the re-advertisement of this speaker's
+// routes for the given family is complete. Its contract is
+// SendRouteRefreshBegin's.
+func (f *FSM) SendRouteRefreshEnd(ctx context.Context, fam Family) error {
+	return f.sendDemarcation(ctx, fam, RouteRefreshEnd)
+}
+
+// sendDemarcation sends a BoRR or EoRR for fam, refusing when the session
+// did not negotiate enhanced route refresh.
+func (f *FSM) sendDemarcation(ctx context.Context, fam Family, sub RouteRefreshSubtype) error {
+	fc := f.established.Load()
+	if fc == nil {
+		return ErrNotEstablished
+	}
+
+	if !fc.sess.EnhancedRouteRefresh {
+		return errors.New("bgp: session did not negotiate the enhanced route refresh capability")
+	}
+
+	return f.send(ctx, fc, &RouteRefresh{Family: fam, Subtype: sub})
 }
 
 // ResetSession ends the established session with a NOTIFICATION, leaving
