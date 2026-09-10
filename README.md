@@ -59,7 +59,7 @@ p, err := bgp.NewPeer(netip.MustParseAddr("192.0.2.1"), bgp.PeerConfig{
 	},
 
 	OnUpdate: func(_ context.Context, _ *bgp.Peer, u *bgp.Update) error {
-		log.Printf("update: reachable %v, withdrawn %v", u.Prefixes, u.Withdrawn)
+		log.Printf("update: reachable %v, withdrawn %v", u.NLRI, u.Withdrawn)
 		return nil
 	},
 })
