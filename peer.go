@@ -231,6 +231,13 @@ type Peer struct {
 // dialed is Dialer.Port. An active peer using the built-in Dialer requires
 // addr. A Passive peer, or a DialFunc transport, may leave it zero, and
 // DeliverConn then checks no address.
+//
+// An IPv6 link-local addr carries a zone, and the zone names this speaker's
+// own interface toward the peer: a zone is a local scope identifier, so
+// each side names both endpoints with its own interface, and a remote named
+// with the far side's interface fails at connect. The zone is carried
+// through the peering, from the dial and Dialer.LocalAddr to the Server's
+// key and the Session's addresses.
 func NewPeer(addr netip.Addr, c PeerConfig) (*Peer, error) {
 	if c.DialFunc != nil && c.MD5Password != "" {
 		return nil, errors.New("bgp: TCP-MD5 is a TCP socket option and cannot apply to a DialFunc transport")
