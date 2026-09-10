@@ -102,6 +102,14 @@ func FuzzParseMessage(f *testing.F) {
 			t.Fatalf("failed to re-parse marshaled message: %v", err)
 		}
 
+		// AppendBinary always advertises the Four-Octet AS Number
+		// capability, so a legacy OPEN parsed without it re-parses with
+		// FourOctetAS set: the one field marshaling adds rather than
+		// reproduces. The fixed point holds from the re-parse onward.
+		if o, ok := m.(*Open); ok {
+			o.FourOctetAS = true
+		}
+
 		if d := diff(t, m, m2); d != "" {
 			t.Fatalf("unexpected re-parsed message (-want +got):\n%s", d)
 		}
@@ -240,6 +248,12 @@ func FuzzParseMessageAddPath(f *testing.F) {
 		m2, err := ParseMessageAddPath(b1, addPath)
 		if err != nil {
 			t.Fatalf("failed to re-parse marshaled message: %v", err)
+		}
+
+		// A legacy OPEN re-parses with FourOctetAS set, exactly as in
+		// FuzzParseMessage.
+		if o, ok := m.(*Open); ok {
+			o.FourOctetAS = true
 		}
 
 		if d := diff(t, m, m2); d != "" {
