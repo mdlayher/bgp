@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -357,7 +358,7 @@ func wantKeepAlive(tb testing.TB, c *Conn, want *net.KeepAliveConfig) {
 
 	enabled := sockoptInt(tb, c, unix.SOL_SOCKET, unix.SO_KEEPALIVE) != 0
 	if wantEnabled := want == nil || want.Enable; enabled != wantEnabled {
-		tb.Fatalf("unexpected SO_KEEPALIVE on %s: got %tb, want %tb", c.LocalAddr(), enabled, wantEnabled)
+		tb.Fatalf("unexpected SO_KEEPALIVE on %s: got %t, want %t", c.LocalAddr(), enabled, wantEnabled)
 	}
 
 	if want == nil || !want.Enable {
@@ -672,6 +673,420 @@ func dialListener(tb testing.TB, ctx context.Context, d *Dialer, l *Listener, md
 	dd := *d
 	dd.Port = ap.Port()
 	return dd.dial(ctx, ap.Addr(), md5)
+}
+
+// TestNewListener adopts a listening socket this package did not bind and
+// proves the result is an ordinary Listener: it accepts, it takes a key, and
+// its sessions work.
+func TestNewListener(t *testing.T) {
+	t.Parallel()
+
+	const password = "adopted horse battery"
+
+	for _, loopback := range localAddrs(t) {
+		t.Run(loopback.String(), func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("session", func(t *testing.T) {
+				t.Parallel()
+
+				l := adoptListener(t, ListenConfig{}, rawListener(t, loopback))
+				testSession(t, l, &Dialer{}, "", blockedTimeout)
+			})
+
+			t.Run("family", func(t *testing.T) {
+				t.Parallel()
+
+				// The family is read from the socket rather than supplied
+				// by the caller, and a Server scopes each peering's key by
+				// it, so a misread would quietly send keys to the wrong
+				// listener. The option paths cannot pin this on their own:
+				// setting an option of the wrong family fails with
+				// ENOPROTOOPT, which the environment checks treat as a
+				// skip.
+				l := adoptListener(t, ListenConfig{}, rawListener(t, loopback))
+				if !l.serves(loopback) {
+					t.Fatalf("the adopted listener does not serve %s", loopback)
+				}
+
+				if other := otherFamily(loopback); l.serves(other) {
+					t.Fatalf("the adopted listener also claims to serve %s", other)
+				}
+			})
+
+			t.Run("md5", func(t *testing.T) {
+				t.Parallel()
+
+				// The key goes on after adoption, which is the Server's
+				// ordering: the socket is already listening by then.
+				l := adoptListener(t, ListenConfig{}, rawListener(t, loopback))
+				if err := l.SetMD5(loopback, password); err != nil {
+					skipUnsupported(t, err)
+					t.Fatalf("failed to set MD5 key: %v", err)
+				}
+
+				testSession(t, l, &Dialer{}, password, blockedTimeout)
+			})
+		})
+	}
+}
+
+// TestNewListenerFileHandoff walks the socket activation path end to end: a
+// listening socket becomes a file descriptor, the descriptor becomes a
+// listener again in another part of the program, and the adopted result
+// carries a signed session.
+func TestNewListenerFileHandoff(t *testing.T) {
+	t.Parallel()
+
+	const password = "activated horse battery"
+
+	for _, loopback := range localAddrs(t) {
+		t.Run(loopback.String(), func(t *testing.T) {
+			t.Parallel()
+
+			bound := rawListener(t, loopback)
+
+			// The descriptor systemd would pass. File dups it, so the
+			// original listener is independent and is closed here to prove
+			// the adopted one stands on its own.
+			f, err := bound.File()
+			if err != nil {
+				t.Fatalf("failed to take the listener's file: %v", err)
+			}
+
+			if err := bound.Close(); err != nil {
+				t.Fatalf("failed to close the original listener: %v", err)
+			}
+
+			nl, err := net.FileListener(f)
+			if err != nil {
+				t.Fatalf("failed to build a listener from the file: %v", err)
+			}
+
+			// FileListener dups again, so the file is the caller's to close.
+			if err := f.Close(); err != nil {
+				t.Fatalf("failed to close the file: %v", err)
+			}
+
+			l := adoptListener(t, ListenConfig{}, nl.(*net.TCPListener))
+			if err := l.SetMD5(loopback, password); err != nil {
+				skipUnsupported(t, err)
+				t.Fatalf("failed to set MD5 key: %v", err)
+			}
+
+			testSession(t, l, &Dialer{}, password, blockedTimeout)
+		})
+	}
+}
+
+// TestNewListenerOptions asserts that the options Listen applies at bind
+// time reach an adopted socket, which is already listening when they are
+// applied.
+func TestNewListenerOptions(t *testing.T) {
+	t.Parallel()
+
+	const send, recv = 64 * 1024, 96 * 1024
+
+	for _, loopback := range localAddrs(t) {
+		t.Run(loopback.String(), func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("gtsm", func(t *testing.T) {
+				t.Parallel()
+
+				o := TCPOptions{GTSM: true}
+				l := adoptListener(t, ListenConfig{TCPOptions: o}, rawListener(t, loopback))
+				testSession(t, l, &Dialer{TCPOptions: o}, "", blockedTimeout)
+			})
+
+			t.Run("gtsm blocks a dialer without it", func(t *testing.T) {
+				t.Parallel()
+
+				// The proof that GTSM really took: a dialer sending the
+				// kernel default TTL is dropped.
+				o := TCPOptions{GTSM: true}
+				l := adoptListener(t, ListenConfig{TCPOptions: o}, rawListener(t, loopback))
+				testBlocked(t, func(ctx context.Context) error {
+					c, err := (&net.Dialer{}).DialContext(
+						ctx, tcpNetwork(loopback), l.Addr().String(),
+					)
+					if err != nil {
+						return err
+					}
+
+					return c.Close()
+				})
+			})
+
+			t.Run("dscp, buffers, and user timeout", func(t *testing.T) {
+				t.Parallel()
+
+				o := TCPOptions{
+					DSCP:        DSCPCS6,
+					UserTimeout: 90 * time.Second,
+					SendBuffer:  send,
+					RecvBuffer:  recv,
+				}
+
+				l := adoptListener(t, ListenConfig{TCPOptions: o}, rawListener(t, loopback))
+				_, server := testConnPair(t, l, &Dialer{})
+
+				// Only the accepted connection is checked: it inherits the
+				// adopted socket's options, while the dialer sets none.
+				wantDSCP(t, server, DSCPCS6)
+				wantUserTimeout(t, server, o.UserTimeout)
+				wantBuffer(t, server, unix.SO_SNDBUF, send)
+				wantBuffer(t, server, unix.SO_RCVBUF, recv)
+			})
+		})
+	}
+}
+
+// TestNewListenerKeepAlive pins the one option an adopted socket cannot
+// inherit. The net package applies its keepalive configuration to the
+// connections accepted from a listener it created, and an adopted socket
+// carries none, so a Listener applies the caller's itself.
+func TestNewListenerKeepAlive(t *testing.T) {
+	t.Parallel()
+
+	custom := &net.KeepAliveConfig{
+		Enable:   true,
+		Idle:     42 * time.Second,
+		Interval: 7 * time.Second,
+		Count:    3,
+	}
+
+	for _, loopback := range localAddrs(t) {
+		t.Run(loopback.String(), func(t *testing.T) {
+			t.Parallel()
+
+			tests := []struct {
+				name string
+				want *net.KeepAliveConfig
+			}{
+				{name: "default"},
+				{name: "custom", want: custom},
+				{name: "disabled", want: &net.KeepAliveConfig{}},
+			}
+
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					t.Parallel()
+
+					o := TCPOptions{KeepAlive: tt.want}
+					l := adoptListener(t, ListenConfig{TCPOptions: o}, rawListener(t, loopback))
+					_, server := testConnPair(t, l, &Dialer{})
+					wantKeepAlive(t, server, tt.want)
+				})
+			}
+		})
+	}
+}
+
+// TestNewListenerRejects covers the sockets a Listener cannot serve. Each is
+// refused at adoption rather than at the first peer, which for a socket
+// activated daemon is the difference between failing at startup and failing
+// in production.
+func TestNewListenerRejects(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		listen func(tb testing.TB) *net.TCPListener
+		substr string
+	}{
+		{
+			name:   "nil",
+			listen: func(testing.TB) *net.TCPListener { return nil },
+			substr: "nil socket",
+		},
+		{
+			// The socket systemd produces by default, because
+			// net.ipv6.bindv6only is 0 on essentially every distribution.
+			name: "dual stack",
+			listen: func(tb testing.TB) *net.TCPListener {
+				// Only an IPv6 socket can be dual stack, so a host
+				// without IPv6 cannot produce the case at all.
+				if !nettest.SupportsIPv6() {
+					tb.Skip("skipping, IPv6 is unavailable")
+				}
+
+				return rawListenerNetwork(tb, "tcp", "[::]:0", false)
+			},
+			substr: "both IPv4 and IPv6",
+		},
+		{
+			// The socket net.Listen produces by default, and one on which
+			// no TCP-MD5 key can ever be installed.
+			name: "multipath TCP",
+			listen: func(tb testing.TB) *net.TCPListener {
+				return rawListenerNetwork(tb, "tcp4", "127.0.0.1:0", true)
+			},
+			substr: "Multipath TCP",
+		},
+		{
+			// net.FileListener wraps a connected socket without complaint,
+			// and the failure would otherwise surface only on Accept.
+			name:   "not listening",
+			listen: connectedListener,
+			substr: "not listening",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			l := tt.listen(t)
+			got, err := (&ListenConfig{}).NewListener(l)
+			if err == nil {
+				_ = got.Close()
+				t.Fatal("expected the socket to be refused, but it was adopted")
+			}
+
+			if !strings.Contains(err.Error(), tt.substr) {
+				t.Fatalf("error does not mention %q: %v", tt.substr, err)
+			}
+
+			// A refused socket is still the caller's, so it must not have
+			// been closed on the way out. SyscallConn still succeeds on a
+			// closed listener, so the deadline is the observation.
+			if l != nil {
+				if err := l.SetDeadline(time.Time{}); errors.Is(err, net.ErrClosed) {
+					t.Fatal("the refused socket was closed")
+				}
+
+				_ = l.Close()
+			}
+		})
+	}
+}
+
+// TestNewListenerBadOptions asserts that adoption validates the options
+// before it touches the socket, the way Listen does.
+func TestNewListenerBadOptions(t *testing.T) {
+	t.Parallel()
+
+	o := TCPOptions{DSCP: maxDSCP + 1}
+	l := rawListener(t, netip.MustParseAddr("127.0.0.1"))
+	if _, err := (&ListenConfig{TCPOptions: o}).NewListener(l); err == nil {
+		t.Fatal("expected an error for an out of range DSCP, but got none")
+	}
+}
+
+// adoptListener adopts l using lc, skipping the test if the environment does
+// not permit the ListenConfig's socket options.
+func adoptListener(tb testing.TB, lc ListenConfig, l *net.TCPListener) *Listener {
+	tb.Helper()
+
+	al, err := lc.NewListener(l)
+	if err != nil {
+		skipUnsupported(tb, err)
+		tb.Fatalf("failed to adopt the listener: %v", err)
+	}
+
+	tb.Cleanup(func() { _ = al.Close() })
+	return al
+}
+
+// otherFamily returns a loopback address of the address family addr is not,
+// for asserting which family a Listener serves.
+func otherFamily(addr netip.Addr) netip.Addr {
+	if addr.Is4() {
+		return netip.MustParseAddr("::1")
+	}
+
+	return netip.MustParseAddr("127.0.0.1")
+}
+
+// rawListener binds a single-family listening socket on the given loopback
+// address without this package's help, standing in for the socket another
+// part of a program, or systemd, would hand over.
+func rawListener(tb testing.TB, loopback netip.Addr) *net.TCPListener {
+	tb.Helper()
+
+	return rawListenerNetwork(tb,
+		tcpNetwork(loopback), netip.AddrPortFrom(loopback, 0).String(), false)
+}
+
+// rawListenerNetwork binds a listening socket on the given network and
+// address, optionally with Multipath TCP, which the net package enables by
+// default and this package cannot serve.
+func rawListenerNetwork(tb testing.TB, network, addr string, mptcp bool) *net.TCPListener {
+	tb.Helper()
+
+	var lc net.ListenConfig
+	lc.SetMultipathTCP(mptcp)
+
+	l, err := lc.Listen(tb.Context(), network, addr)
+	if err != nil {
+		tb.Fatalf("failed to listen on %s %s: %v", network, addr, err)
+	}
+
+	tl, ok := l.(*net.TCPListener)
+	if !ok {
+		tb.Fatalf("unexpected listener type %T", l)
+	}
+
+	if mptcp {
+		// A kernel without Multipath TCP silently falls back to plain TCP,
+		// and the socket under test would then be the wrong one.
+		rc, err := tl.SyscallConn()
+		if err != nil {
+			tb.Fatalf("failed to get raw connection: %v", err)
+		}
+
+		var proto int
+		if err := control(rc, func(fd int) error {
+			var err error
+			proto, err = unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_PROTOCOL)
+			return err
+		}); err != nil {
+			tb.Fatalf("failed to read SO_PROTOCOL: %v", err)
+		}
+
+		if proto != unix.IPPROTO_MPTCP {
+			_ = tl.Close()
+			tb.Skip("skipping, this kernel does not support Multipath TCP")
+		}
+	}
+
+	return tl
+}
+
+// connectedListener returns a connected socket wrapped as a listener, the
+// shape net.FileListener produces from a descriptor which is not listening.
+func connectedListener(tb testing.TB) *net.TCPListener {
+	tb.Helper()
+
+	l := rawListenerNetwork(tb, "tcp4", "127.0.0.1:0", false)
+	tb.Cleanup(func() { _ = l.Close() })
+
+	c, err := net.Dial("tcp4", l.Addr().String())
+	if err != nil {
+		tb.Fatalf("failed to dial: %v", err)
+	}
+
+	tb.Cleanup(func() { _ = c.Close() })
+
+	f, err := c.(*net.TCPConn).File()
+	if err != nil {
+		tb.Fatalf("failed to take the connection's file: %v", err)
+	}
+
+	defer f.Close()
+
+	nl, err := net.FileListener(f)
+	if err != nil {
+		tb.Skipf("skipping, net.FileListener refused a connected socket itself: %v", err)
+	}
+
+	tl, ok := nl.(*net.TCPListener)
+	if !ok {
+		tb.Fatalf("unexpected listener type %T", nl)
+	}
+
+	return tl
 }
 
 // TestAcceptTransient pins the accept-loop resilience classification: a

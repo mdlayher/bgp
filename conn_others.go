@@ -40,6 +40,12 @@ func setBuffer(_ syscall.RawConn, _ bool, _ int) error {
 		errors.ErrUnsupported)
 }
 
+// listenerSocket is not implemented on this platform.
+func listenerSocket(_ syscall.RawConn) (listenerFamily, error) {
+	return listenerFamily{}, fmt.Errorf("bgp: adopting a listening socket is not supported on this platform: %w",
+		errors.ErrUnsupported)
+}
+
 // acceptTransient reports no transient accept errors on this platform:
 // without portable errno semantics, every accept failure is treated as
 // listener death.

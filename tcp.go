@@ -94,9 +94,10 @@ type TCPOptions struct {
 
 	// RecvBuffer optionally sets the size in bytes of the kernel's
 	// receive buffer (SO_RCVBUF), with SendBuffer's zero, rounding, and
-	// negative-value semantics. It is set before the socket connects or
-	// listens: the only point at which the buffer can influence the
-	// window scale TCP negotiates.
+	// negative-value semantics. It is set before the socket carries a
+	// connection: the only point at which the buffer can influence the
+	// window scale TCP negotiates. On a listening socket it shapes the
+	// connections accepted afterwards, an adopted socket's included.
 	RecvBuffer int
 
 	// KeepAlive optionally configures TCP keepalive probes. The nil value
@@ -160,22 +161,12 @@ func (o TCPOptions) check() error {
 }
 
 // control applies the options to the socket underlying c, which belongs to
-// the resolved network network. The IP-level options are each a level/option
-// pair selected by address family, which the single-family network name
-// decides; the TCP-level options are the same in both families.
-func (o TCPOptions) control(network string, c syscall.RawConn) error {
+// the IPv4 address family when ipv4 is true and IPv6 otherwise. The
+// IP-level options are each a level/option pair selected by that family;
+// the TCP-level options are the same in both.
+func (o TCPOptions) control(ipv4 bool, c syscall.RawConn) error {
 	if o == (TCPOptions{}) {
 		return nil
-	}
-
-	var ipv4 bool
-	switch network {
-	case "tcp4":
-		ipv4 = true
-	case "tcp6":
-		ipv4 = false
-	default:
-		return fmt.Errorf("bgp: cannot set socket options on network %q", network)
 	}
 
 	if o.GTSM {
@@ -255,14 +246,14 @@ func (d *Dialer) dial(ctx context.Context, addr netip.Addr, md5 string) (*Conn, 
 	}
 
 	nd := &net.Dialer{
-		Control: func(network string, _ string, c syscall.RawConn) error {
+		Control: func(_, _ string, c syscall.RawConn) error {
 			if md5 != "" {
 				if err := setMD5(c, addr, md5); err != nil {
 					return err
 				}
 			}
 
-			return d.control(network, c)
+			return d.control(addr.Is4(), c)
 		},
 	}
 
@@ -310,8 +301,8 @@ func (lc *ListenConfig) Listen(ctx context.Context, laddr netip.AddrPort) (*List
 	}
 
 	nlc := &net.ListenConfig{
-		Control: func(network string, _ string, c syscall.RawConn) error {
-			return lc.control(network, c)
+		Control: func(_, _ string, c syscall.RawConn) error {
+			return lc.control(addr.Is4(), c)
 		},
 	}
 
@@ -338,7 +329,71 @@ func (lc *ListenConfig) Listen(ctx context.Context, laddr netip.AddrPort) (*List
 	return &Listener{l: tl, rc: rc, v4: addr.Is4()}, nil
 }
 
-// A Listener accepts BGP connections opened by a peer: the passive open.
+// NewListener adopts an existing listening socket and returns a Listener
+// which serves it, applying the ListenConfig's options as Listen does. It is
+// intended for advanced use cases such as systemd socket activation.
+// [net.FileListener] turns a file descriptor into the *net.TCPListener this
+// method takes.
+//
+// The socket must be listening, must not use Multipath TCP, and must serve
+// exactly one address family. A dual-stack socket is rejected: a Listener
+// installs TCP-MD5 keys and socket options for one family, so a socket
+// serving both would leave an IPv4 peer's key uninstalled and its signed SYN
+// dropped by the kernel. Bind one socket per family instead.
+//
+// On success the Listener owns the socket and Close closes it; a failure
+// never closes it. The socket may already have accepted connections, which
+// met no TCP-MD5 key; see [Server.Run] for the same window on a new socket.
+//
+// Adoption is only supported on Linux. Elsewhere, NewListener returns an
+// error which wraps [errors.ErrUnsupported].
+func (lc *ListenConfig) NewListener(l *net.TCPListener) (*Listener, error) {
+	if l == nil {
+		return nil, errors.New("bgp: a Listener cannot adopt a nil socket")
+	}
+
+	if err := lc.check(); err != nil {
+		return nil, err
+	}
+
+	rc, err := l.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+
+	fam, err := listenerSocket(rc)
+	if err != nil {
+		return nil, err
+	}
+
+	if fam.dual {
+		return nil, errors.New("bgp: the socket accepts both IPv4 and IPv6 connections, and a Listener serves exactly one address family; bind one socket per family instead")
+	}
+
+	if err := lc.control(fam.v4, rc); err != nil {
+		return nil, err
+	}
+
+	// The net package applies its keepalive configuration to the connections
+	// accepted from a listener it created, and an adopted socket has none, so
+	// Accept applies the caller's instead.
+	return &Listener{l: l, rc: rc, v4: fam.v4, keepAlive: lc.KeepAlive}, nil
+}
+
+// A listenerFamily is the address family posture of a listening socket, read
+// from the socket itself by listenerSocket.
+type listenerFamily struct {
+	// v4 is set for an IPv4 socket.
+	v4 bool
+
+	// dual is set for an IPv6 socket which also accepts IPv4 connections,
+	// as v4-mapped ones. A Listener cannot serve one; see NewListener.
+	dual bool
+}
+
+// A Listener accepts BGP connections opened by a peer: the passive open. It
+// serves exactly one address family, so that socket options such as GTSM
+// apply to every connection it accepts.
 type Listener struct {
 	l *net.TCPListener
 
@@ -350,6 +405,14 @@ type Listener struct {
 	// the kernel requires a key to be present before a peer's SYN arrives, and
 	// accepted connections inherit the listening socket's keys.
 	rc syscall.RawConn
+
+	// keepAlive is the caller's keepalive configuration, applied to each
+	// accepted connection by Accept. Only an adopted Listener sets it: a
+	// listener the net package bound carries the configuration itself and
+	// applies it on accept, while an adopted socket carries none, so the
+	// caller's option would otherwise be silently ignored. A nil value
+	// leaves the net package's default in place either way.
+	keepAlive *net.KeepAliveConfig
 }
 
 // Accept waits for and returns the next connection to the Listener, mirroring
@@ -361,7 +424,7 @@ func (l *Listener) Accept() (*Conn, error) {
 			return nil, err
 		}
 
-		if err := setNoDelay(c); err != nil {
+		if err := l.setup(c); err != nil {
 			// A connection which cannot take socket options is already
 			// dead. Its failure belongs to the connection, not the
 			// listener, so it must not surface as an Accept error: close
@@ -372,6 +435,20 @@ func (l *Listener) Accept() (*Conn, error) {
 
 		return NewConn(c), nil
 	}
+}
+
+// setup applies to an accepted connection the options which do not survive
+// the kernel's inheritance from the listening socket.
+func (l *Listener) setup(c *net.TCPConn) error {
+	if err := setNoDelay(c); err != nil {
+		return err
+	}
+
+	if l.keepAlive == nil {
+		return nil
+	}
+
+	return c.SetKeepAliveConfig(*l.keepAlive)
 }
 
 // SetMD5 installs a TCP-MD5 (RFC 2385) key for the speaker at peer on the

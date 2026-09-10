@@ -71,6 +71,86 @@ func setMD5(c syscall.RawConn, peer netip.Addr, password string) error {
 	})
 }
 
+// listenerSocket reports the address family posture of the listening socket
+// underlying c. A socket which cannot serve as a Listener at all is rejected
+// here, before any option is set on it.
+func listenerSocket(c syscall.RawConn) (listenerFamily, error) {
+	var (
+		fam listenerFamily
+		err error
+	)
+
+	if doErr := c.Control(func(fd uintptr) {
+		fam, err = inspectListener(int(fd))
+	}); doErr != nil {
+		return listenerFamily{}, doErr
+	}
+
+	return fam, err
+}
+
+// inspectListener implements listenerSocket for one file descriptor.
+func inspectListener(fd int) (listenerFamily, error) {
+	// The net package does not check this: net.FileListener wraps a
+	// connected socket in a listener without complaint, and the failure
+	// surfaces only on the first Accept, which for a socket activated
+	// daemon means at its first peer rather than at startup.
+	accept, err := getsockoptInt(fd, unix.SOL_SOCKET, unix.SO_ACCEPTCONN)
+	if err != nil {
+		return listenerFamily{}, err
+	}
+
+	if accept == 0 {
+		return listenerFamily{}, errors.New("bgp: the socket is not listening")
+	}
+
+	// A Multipath TCP socket rejects every option a BGP speaker sets; see
+	// useMultipathTCP. The net package dials and listens with Multipath TCP
+	// by default, so an adopted socket carries it unless its creator said
+	// otherwise.
+	proto, err := getsockoptInt(fd, unix.SOL_SOCKET, unix.SO_PROTOCOL)
+	if err != nil {
+		return listenerFamily{}, err
+	}
+
+	if proto == unix.IPPROTO_MPTCP {
+		return listenerFamily{}, errors.New("bgp: the socket uses Multipath TCP, which rejects TCP-MD5 and the TTL options a BGP speaker sets")
+	}
+
+	domain, err := getsockoptInt(fd, unix.SOL_SOCKET, unix.SO_DOMAIN)
+	if err != nil {
+		return listenerFamily{}, err
+	}
+
+	switch domain {
+	case unix.AF_INET:
+		return listenerFamily{v4: true}, nil
+	case unix.AF_INET6:
+		// IPV6_V6ONLY is only readable on an IPv6 socket, so the family
+		// has to be known first: on an IPv4 socket the read fails with
+		// ENOPROTOOPT rather than reporting anything about the socket.
+		only, err := getsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_V6ONLY)
+		if err != nil {
+			return listenerFamily{}, err
+		}
+
+		return listenerFamily{dual: only == 0}, nil
+	default:
+		return listenerFamily{}, fmt.Errorf("bgp: the socket has address family %d, which is neither IPv4 nor IPv6", domain)
+	}
+}
+
+// getsockoptInt reads one integer socket option, wrapping a failure the way
+// the package's other socket errors are wrapped; see control.
+func getsockoptInt(fd, level, opt int) (int, error) {
+	v, err := unix.GetsockoptInt(fd, level, opt)
+	if err != nil {
+		return 0, fmt.Errorf("bgp: %w", os.NewSyscallError("getsockopt", err))
+	}
+
+	return v, nil
+}
+
 // acceptTransient classifies an accept failure which is not listener
 // death: abort reports a single connection the kernel aborted before it
 // was accepted (retry immediately), and exhausted reports file descriptor
