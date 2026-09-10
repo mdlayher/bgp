@@ -78,6 +78,7 @@ func buildOpen(id Identity, restarting bool) (*Open, error) {
 		HoldTime:     id.HoldTime,
 		ID:           id.LocalID,
 		Capabilities: caps,
+		FourOctetAS:  true,
 	}
 
 	if _, err := o.AppendBinary(nil); err != nil {
@@ -98,7 +99,7 @@ func (f *FSM) negotiate(local, o *Open) (Session, *MessageError) {
 	// field, so an ASN comparison before it would report a misleading Bad
 	// Peer AS. The diagnostic data names the required capability, per RFC
 	// 5492, section 5.
-	if !o.fourOctet {
+	if !o.FourOctetAS {
 		data := mustAppendCapability(nil, Capability{
 			Code: CapabilityFourOctetAS,
 			Data: binary.BigEndian.AppendUint32(nil, f.cfg.LocalASN),

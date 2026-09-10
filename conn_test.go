@@ -29,9 +29,10 @@ func TestConnRoundTrip(t *testing.T) {
 		{
 			name: "open",
 			m: &Open{
-				ASN:      65536,
-				HoldTime: 90 * time.Second,
-				ID:       MustParseIdentifier("192.0.2.1"),
+				ASN:         65536,
+				HoldTime:    90 * time.Second,
+				ID:          MustParseIdentifier("192.0.2.1"),
+				FourOctetAS: true,
 				Capabilities: []Capability{
 					MultiprotocolCapability(Family{AFI: AFIIPv4, SAFI: SAFIUnicast}),
 					MultiprotocolCapability(Family{AFI: AFIIPv6, SAFI: SAFIUnicast}),

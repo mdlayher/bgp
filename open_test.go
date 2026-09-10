@@ -64,7 +64,7 @@ func TestOpenParseTwoByteASN(t *testing.T) {
 	}
 }
 
-// TestParseOpenFourOctet pins the fourOctet signal: a parsed OPEN records
+// TestParseOpenFourOctet pins the FourOctetAS signal: a parsed OPEN records
 // whether the peer advertised the Four-Octet AS Number capability, so a
 // session can distinguish a legacy 2 byte speaker from a four-octet speaker
 // with a small ASN.
@@ -87,8 +87,8 @@ func TestParseOpenFourOctet(t *testing.T) {
 		t.Fatalf("failed to parse OPEN: %v", err)
 	}
 
-	if !m.(*Open).fourOctet {
-		t.Fatal("expected fourOctet to be set for a peer with the capability")
+	if !m.(*Open).FourOctetAS {
+		t.Fatal("expected FourOctetAS to be set for a peer with the capability")
 	}
 
 	// A legacy speaker without the capability must not report it.
@@ -103,8 +103,8 @@ func TestParseOpenFourOctet(t *testing.T) {
 		t.Fatalf("failed to parse legacy OPEN: %v", err)
 	}
 
-	if m.(*Open).fourOctet {
-		t.Fatal("expected fourOctet to be unset for a peer without the capability")
+	if m.(*Open).FourOctetAS {
+		t.Fatal("expected FourOctetAS to be unset for a peer without the capability")
 	}
 }
 
@@ -428,6 +428,7 @@ func TestExtendedNextHopCapability(t *testing.T) {
 	o := &Open{
 		ASN:          64496,
 		ID:           MustParseIdentifier("192.0.2.1"),
+		FourOctetAS:  true,
 		Capabilities: []Capability{c},
 	}
 
@@ -896,6 +897,7 @@ func TestFQDNCapability(t *testing.T) {
 	o := &Open{
 		ASN:          64496,
 		ID:           MustParseIdentifier("192.0.2.1"),
+		FourOctetAS:  true,
 		Capabilities: []Capability{c},
 	}
 

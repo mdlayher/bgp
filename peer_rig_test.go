@@ -414,9 +414,10 @@ func (s *script) establish(open *Open) {
 // interval.
 func scriptOpen() *Open {
 	return &Open{
-		ASN:      64497,
-		HoldTime: 30 * time.Second,
-		ID:       MustParseIdentifier("192.0.2.2"),
+		ASN:         64497,
+		HoldTime:    30 * time.Second,
+		ID:          MustParseIdentifier("192.0.2.2"),
+		FourOctetAS: true,
 	}
 }
 

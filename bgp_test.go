@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 func TestMessageRoundTrip(t *testing.T) {
@@ -25,33 +24,39 @@ func TestMessageRoundTrip(t *testing.T) {
 		},
 		{
 			name: "open minimal",
+			// Every OPEN this package marshals advertises the Four-Octet
+			// AS Number capability, so its parse reports FourOctetAS.
 			m: &Open{
-				ASN:      64496,
-				HoldTime: 90 * time.Second,
-				ID:       MustParseIdentifier("192.0.2.1"),
+				ASN:         64496,
+				HoldTime:    90 * time.Second,
+				ID:          MustParseIdentifier("192.0.2.1"),
+				FourOctetAS: true,
 			},
 		},
 		{
 			name: "open zero hold time",
 			m: &Open{
-				ASN: 64496,
-				ID:  MustParseIdentifier("192.0.2.1"),
+				ASN:         64496,
+				ID:          MustParseIdentifier("192.0.2.1"),
+				FourOctetAS: true,
 			},
 		},
 		{
 			name: "open four octet ASN",
 			m: &Open{
-				ASN:      65536,
-				HoldTime: 3 * time.Second,
-				ID:       MustParseIdentifier("203.0.113.255"),
+				ASN:         65536,
+				HoldTime:    3 * time.Second,
+				ID:          MustParseIdentifier("203.0.113.255"),
+				FourOctetAS: true,
 			},
 		},
 		{
 			name: "open capabilities",
 			m: &Open{
-				ASN:      64496,
-				HoldTime: 180 * time.Second,
-				ID:       MustParseIdentifier("192.0.2.1"),
+				ASN:         64496,
+				HoldTime:    180 * time.Second,
+				ID:          MustParseIdentifier("192.0.2.1"),
+				FourOctetAS: true,
 				Capabilities: []Capability{
 					MultiprotocolCapability(Family{AFI: AFIIPv4, SAFI: SAFIUnicast}),
 					MultiprotocolCapability(Family{AFI: AFIIPv6, SAFI: SAFIUnicast}),
@@ -324,11 +329,6 @@ func diff[T any](tb testing.TB, want, got T) string {
 
 	return cmp.Diff(
 		want, got,
-		// Open.fourOctet is a parse-side signal for the FSM, pinned by
-		// TestParseOpenFourOctet rather than compared structurally.
-		// Comparing it would force every round-trip want to declare the
-		// post-parse state; that is deferred as a follow-up.
-		cmpopts.IgnoreUnexported(Open{}),
 		// RawAttribute.addPath is compared rather than ignored: a wrong
 		// add-path mark silently corrupts NLRI decoding, so a want value
 		// asserts the expected state. cmp needs permission to read it, and

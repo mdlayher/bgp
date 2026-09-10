@@ -44,12 +44,14 @@ type Open struct {
 	// described in RFC 5492.
 	Capabilities []Capability
 
-	// fourOctet records whether a parsed OPEN carried the Four-Octet AS
-	// Number capability, which parseOpen consumes; see [Open.ASN]. A session
-	// must reject a speaker without it, since ASN is otherwise ambiguous
-	// for four byte values. Meaningful only on an Open produced by
-	// ParseMessage.
-	fourOctet bool
+	// FourOctetAS reports whether an OPEN carries the Four-Octet AS Number
+	// capability. ParseMessage sets it when it consumes the capability into
+	// ASN, and the OPEN this package builds for its own speaker carries it,
+	// since AppendBinary always advertises the capability. AppendBinary
+	// ignores the field itself, so a zero value marshals. The FSM rejects a
+	// peer without it, since ASN is otherwise ambiguous for four byte
+	// values.
+	FourOctetAS bool
 }
 
 func (*Open) messageType() MessageType { return MessageTypeOpen }
@@ -205,7 +207,7 @@ func (o *Open) parseCapabilities(caps []byte) error {
 			}
 
 			o.ASN = binary.BigEndian.Uint32(c.Data)
-			o.fourOctet = true
+			o.FourOctetAS = true
 		} else {
 			o.Capabilities = append(o.Capabilities, c)
 		}

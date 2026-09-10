@@ -314,9 +314,10 @@ func TestPeerOpenSent(t *testing.T) {
 		s := r.acceptScript()
 
 		want := &Open{
-			ASN:      64496,
-			HoldTime: 90 * time.Second,
-			ID:       MustParseIdentifier("192.0.2.1"),
+			ASN:         64496,
+			HoldTime:    90 * time.Second,
+			ID:          MustParseIdentifier("192.0.2.1"),
+			FourOctetAS: true,
 			Capabilities: []Capability{
 				MultiprotocolCapability(v4u),
 				MultiprotocolCapability(v6u),
@@ -348,9 +349,10 @@ func TestPeerEstablished(t *testing.T) {
 		// The peer supports only IPv4 unicast, route refresh, and IPv6 next
 		// hops for IPv4 routes, and proposes a shorter hold time than ours.
 		open := &Open{
-			ASN:      64497,
-			HoldTime: 30 * time.Second,
-			ID:       MustParseIdentifier("192.0.2.2"),
+			ASN:         64497,
+			HoldTime:    30 * time.Second,
+			ID:          MustParseIdentifier("192.0.2.2"),
+			FourOctetAS: true,
 			Capabilities: []Capability{
 				MultiprotocolCapability(v4u),
 				{Code: CapabilityRouteRefresh},
@@ -409,9 +411,10 @@ func TestPeerAddPath(t *testing.T) {
 		// The peer sends for both families but receives only IPv4
 		// unicast: the negotiated result is per family and per direction.
 		open := &Open{
-			ASN:      64497,
-			HoldTime: 90 * time.Second,
-			ID:       MustParseIdentifier("192.0.2.2"),
+			ASN:         64497,
+			HoldTime:    90 * time.Second,
+			ID:          MustParseIdentifier("192.0.2.2"),
+			FourOctetAS: true,
 			Capabilities: []Capability{
 				MultiprotocolCapability(v4u),
 				MultiprotocolCapability(v6u),
@@ -511,9 +514,10 @@ func TestPeerGracefulRestart(t *testing.T) {
 				s := r.acceptScript()
 
 				want := &Open{
-					ASN:      64496,
-					HoldTime: 90 * time.Second,
-					ID:       MustParseIdentifier("192.0.2.1"),
+					ASN:         64496,
+					HoldTime:    90 * time.Second,
+					ID:          MustParseIdentifier("192.0.2.1"),
+					FourOctetAS: true,
 					Capabilities: []Capability{
 						MultiprotocolCapability(v4u),
 						must(GracefulRestartCapability(GracefulRestart{
@@ -609,9 +613,10 @@ func TestPeerLongLivedGracefulRestart(t *testing.T) {
 		s := r.acceptScript()
 
 		want := &Open{
-			ASN:      64496,
-			HoldTime: 90 * time.Second,
-			ID:       MustParseIdentifier("192.0.2.1"),
+			ASN:         64496,
+			HoldTime:    90 * time.Second,
+			ID:          MustParseIdentifier("192.0.2.1"),
+			FourOctetAS: true,
 			Capabilities: []Capability{
 				MultiprotocolCapability(v4u),
 				MultiprotocolCapability(v6u),

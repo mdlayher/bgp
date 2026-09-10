@@ -75,7 +75,7 @@ var _OpenCloneNeedsRegeneration = Open(struct {
 	HoldTime     time.Duration
 	ID           Identifier
 	Capabilities []Capability
-	fourOctet    bool
+	FourOctetAS  bool
 }{})
 
 // Clone makes a deep copy of Capability.
