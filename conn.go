@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -220,6 +221,24 @@ func (c *Conn) RemoteAddr() net.Addr { return c.c.RemoteAddr() }
 // Close closes the connection. Any blocked ReadMessage or WriteMessage call
 // is unblocked and returns an error.
 func (c *Conn) Close() error { return c.c.Close() }
+
+// CloseWrite shuts down the sending half of the connection: the peer reads
+// what was written and then end of file, while ReadMessage continues until
+// the peer closes its own end. A transport which cannot half close, such as
+// net.Pipe, returns an error which wraps [errors.ErrUnsupported].
+//
+// A last message reaches a peer which is still sending only if the
+// connection is half closed and drained before Close. A TCP close with the
+// peer's bytes unread resets the connection instead, and the peer's next
+// write fails before its reader delivers the message.
+func (c *Conn) CloseWrite() error {
+	cw, ok := c.c.(interface{ CloseWrite() error })
+	if !ok {
+		return fmt.Errorf("bgp: %T cannot close its sending half: %w", c.c, errors.ErrUnsupported)
+	}
+
+	return cw.CloseWrite()
+}
 
 // A marshalError wraps a message marshal failure from WriteMessage: the
 // message never reached the connection, so the failure belongs to the

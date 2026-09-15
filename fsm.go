@@ -45,8 +45,16 @@ const (
 	// (the OPEN exchange and NOTIFICATIONs), and the wait for a stuck
 	// handler's reader goroutine during session teardown. endSession spends
 	// the budget up to twice in sequence (the write deadline, then the
-	// reader join), so a worst-case teardown is two timeouts, not one.
+	// reader join), so a worst-case teardown is two timeouts, not one, plus
+	// drainTimeout between them.
 	teardownTimeout = 5 * time.Second
+
+	// drainTimeout bounds endSession's half closed drain, the wait for the
+	// peer to close its own end after the NOTIFICATION. It is far shorter
+	// than teardownTimeout: a peer which has not acted on a NOTIFICATION
+	// within it is not going to, and every session of a speaker shutting
+	// down spends it.
+	drainTimeout = 1 * time.Second
 )
 
 // An Identity carries the protocol identity and negotiation surface of one
@@ -213,7 +221,9 @@ type FSMConfig struct {
 	//   - A non-nil handler error terminates the session. If the error is
 	//     a *MessageError (per errors.AsType), its code, subcode, and data
 	//     become the NOTIFICATION sent to the peer; any other error sends
-	//     Cease.
+	//     Cease. An error returned after Connect's ctx is canceled is the
+	//     handler obeying the shutdown, and is ignored: the shutdown's
+	//     NOTIFICATION is sent instead.
 	OnEstablished func(ctx context.Context, f *FSM, s Session) error
 
 	// OnUpdate, if set, is called for each UPDATE received while the

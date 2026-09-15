@@ -95,7 +95,9 @@ type PeerConfig struct {
 	//   - A non-nil handler error terminates the session. If the error is
 	//     a *MessageError (per errors.AsType), its code, subcode, and data
 	//     become the NOTIFICATION sent to the peer; any other error sends
-	//     Cease.
+	//     Cease. An error returned after Run's ctx is canceled is the
+	//     handler obeying the shutdown, and is ignored: the shutdown's
+	//     NOTIFICATION is sent instead.
 	OnEstablished func(ctx context.Context, p *Peer, s Session) error
 
 	// OnUpdate, if set, is called for each UPDATE received while the

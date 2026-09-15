@@ -843,6 +843,22 @@ func (a *attempt) established(ctx context.Context, fc *fsmConn) error {
 			// The established connection's own terminal event: every other
 			// connection was killed and joined before establishment, so no
 			// other reader exists to send one; see event.
+			//
+			// A handler error after ctx is canceled is the handler obeying
+			// the shutdown, not ending the session: the Close is the one
+			// the ctx.Done branch produces, so which the select saw first
+			// is not observable. A peer's NOTIFICATION or a dead transport
+			// still decides its own close.
+			if ev.handlerErr != nil && ctx.Err() != nil {
+				cl := Close{
+					Notification: a.f.shutdownCease(ctx),
+					Local:        true,
+				}
+
+				a.f.endSession(fc, cl)
+				return ctx.Err()
+			}
+
 			a.f.endSession(fc, sessionClose(ev))
 			return nil
 		}
@@ -883,7 +899,17 @@ func (f *FSM) endSession(fc *fsmConn, cl Close) {
 		}
 	}
 
-	_ = fc.c.Close()
+	// Half close and drain rather than close: a close with the peer's
+	// bytes unread resets the connection, and the peer's writer fails
+	// before its reader delivers the NOTIFICATION; see Conn.CloseWrite.
+	// The read deadline bounds the drain against a peer which never
+	// closes its own end. A transport which cannot half close, or a dead
+	// connection, has nothing to drain for.
+	if err := fc.c.CloseWrite(); err != nil {
+		_ = fc.c.Close()
+	} else {
+		_ = fc.c.SetReadDeadline(time.Now().Add(drainTimeout))
+	}
 
 	// The reader join is bounded: a handler which ignores its canceled ctx
 	// would otherwise park the FSM goroutine forever, wedging the whole
@@ -900,6 +926,9 @@ func (f *FSM) endSession(fc *fsmConn, cl Close) {
 	case <-t.C:
 		cl.Err = errors.Join(cl.Err, errStuckHandler)
 	}
+
+	// The drain is over either way. A second Close is harmless.
+	_ = fc.c.Close()
 
 	f.onClose(cl)
 }

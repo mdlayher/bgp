@@ -229,11 +229,25 @@ func (f *FSM) readSession(fc *fsmConn) {
 	// goroutine as a terminal event; it reports whether the loop continues.
 	handle := func(h func() error) bool {
 		err := f.callHandler(fc, h)
-		if err != nil {
-			f.forward(fc, connEvent{fc: fc, handlerErr: err})
+		if err == nil {
+			return true
 		}
 
-		return err == nil
+		// An error after the session context is canceled is the handler
+		// obeying the teardown, not ending the session: the teardown owns
+		// the NOTIFICATION, and the reader stays on the socket to drain
+		// for it; see endSession.
+		if fc.sessCtx.Err() != nil {
+			return true
+		}
+
+		ev := connEvent{
+			fc:         fc,
+			handlerErr: err,
+		}
+
+		f.forward(fc, ev)
+		return false
 	}
 
 	if h := f.cfg.OnEstablished; h != nil {
@@ -248,6 +262,15 @@ func (f *FSM) readSession(fc *fsmConn) {
 		if err != nil {
 			f.forward(fc, connEvent{fc: fc, err: err})
 			return
+		}
+
+		select {
+		case <-fc.fsmDone:
+			// The teardown is draining the connection; see endSession.
+			// The session is over, so the message is discarded rather
+			// than dispatched to a handler.
+			continue
+		default:
 		}
 
 		switch m := m.(type) {
