@@ -205,6 +205,52 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 			},
 		},
 		{
+			// netip distinguishes an IPv4-mapped IPv6 address from the
+			// IPv4 address sharing its value, and so does the wire: this
+			// is a sixteen byte next hop, not a four byte one. Route
+			// collectors see real peers send it.
+			name: "MP reach IPv4-mapped IPv6 next hop",
+			attr: MPReachNLRI{
+				Family:  Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				NextHop: netip.MustParseAddr("::ffff:198.51.100.1"),
+				NLRI:    Prefixes{netip.MustParsePrefix("2001:db8::/32")},
+			},
+			raw: RawAttribute{
+				Flags: AttrFlagOptional,
+				Type:  AttrMPReachNLRI,
+				Data: []byte{
+					0x00, 0x02, 0x01,
+					16,
+					0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 198, 51, 100, 1,
+					0x00,
+					32, 0x20, 0x01, 0x0d, 0xb8,
+				},
+			},
+		},
+		{
+			// The same address as the global half of an RFC 2545 pair,
+			// which has no four byte form to be re-encoded into at all.
+			name: "MP reach IPv4-mapped IPv6 next hop with link local",
+			attr: MPReachNLRI{
+				Family:    Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				NextHop:   netip.MustParseAddr("::ffff:198.51.100.1"),
+				LinkLocal: netip.MustParseAddr("fe80::1"),
+				NLRI:      Prefixes{netip.MustParsePrefix("2001:db8::/32")},
+			},
+			raw: RawAttribute{
+				Flags: AttrFlagOptional,
+				Type:  AttrMPReachNLRI,
+				Data: []byte{
+					0x00, 0x02, 0x01,
+					32,
+					0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 198, 51, 100, 1,
+					0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+					0x00,
+					32, 0x20, 0x01, 0x0d, 0xb8,
+				},
+			},
+		},
+		{
 			name: "MP reach RFC 8950 IPv4 via IPv6",
 			attr: MPReachNLRI{
 				Family:  Family{AFI: AFIIPv4, SAFI: SAFIUnicast},

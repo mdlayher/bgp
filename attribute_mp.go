@@ -19,6 +19,11 @@ type MPReachNLRI struct {
 	// hop, a real wire shape: a flowspec UPDATE (RFC 8955) carries none.
 	// The route distinguishers a VPN family wraps around its next hop on
 	// the wire are managed by this package and never appear here.
+	//
+	// An IPv4-mapped IPv6 address is an IPv6 next hop and is encoded in
+	// sixteen bytes, since netip distinguishes it from the IPv4 address
+	// sharing its value and so does the wire. Call Unmap on an address
+	// which came from a 16 byte net.IP to send the four byte form.
 	NextHop netip.Addr
 
 	// LinkLocal optionally carries an IPv6 link-local next hop alongside
@@ -49,7 +54,13 @@ func (m MPReachNLRI) appendData(b []byte) ([]byte, error) {
 
 	var zero [8]byte
 
-	nh, ll := m.NextHop.Unmap(), m.LinkLocal.Unmap()
+	// The address as given selects the encoding, because the wire's next
+	// hop length field encodes the same distinction netip does: an IPv4
+	// address is four bytes, and the IPv4-mapped IPv6 address sharing its
+	// value is an IPv6 address of sixteen. Unmapping here would re-encode
+	// a peer's sixteen byte next hop as four, which is a different next
+	// hop and, for an IPv6 family, not a legal one.
+	nh, ll := m.NextHop, m.LinkLocal
 	switch {
 	case !nh.IsValid() && !ll.IsValid():
 		// An absent next hop: length zero, whatever the family.
