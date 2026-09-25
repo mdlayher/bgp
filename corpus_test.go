@@ -98,22 +98,30 @@ func TestCorpusRIB(t *testing.T) {
 // an entire real route collector updates file: each message must parse, each
 // attribute of a type known to this package must parse in typed form, and
 // parsing must be a fixed point of marshaling.
+//
+// The checked-in excerpt carries only UPDATEs and KEEPALIVEs, but a
+// full-size file fetched into testdata/large archives whole sessions, so
+// every message type appears. Each is counted by type rather than enumerated,
+// since which types a collector happens to have captured is not this test's
+// subject.
 func TestCorpusParse(t *testing.T) {
 	t.Parallel()
 
-	var updates, keepalives, attrs, rawOnly int
+	var (
+		counts         = make(map[MessageType]int)
+		attrs, rawOnly int
+	)
+
 	for i, b := range corpusMessages(t) {
 		m, err := ParseMessage(b)
 		if err != nil {
 			t.Fatalf("failed to parse corpus message %d: %v", i, err)
 		}
 
-		switch m := m.(type) {
-		case *Keepalive:
-			keepalives++
-		case *Update:
-			updates++
-			for _, a := range m.Attributes {
+		counts[m.messageType()]++
+
+		if u, ok := m.(*Update); ok {
+			for _, a := range u.Attributes {
 				attrs++
 				if _, err := a.Parse(); err != nil {
 					// Attribute types unknown to this package remain
@@ -127,13 +135,20 @@ func TestCorpusParse(t *testing.T) {
 					rawOnly++
 				}
 			}
-		default:
-			t.Fatalf("unexpected corpus message %d type: %T", i, m)
 		}
 
 		// Parse must be a fixed point: re-marshaling and re-parsing the
 		// message reproduces it, modulo the wire normalizations enumerated
 		// in the roadmap (extended length flags, prefix masking).
+		//
+		// The assertion is on the marshaled bytes rather than the parsed
+		// values, for two reasons. A full-size collector file runs to
+		// hundreds of thousands of messages, and cmp.Diff on each costs
+		// more than ten minutes where a byte comparison costs seconds. And
+		// the bytes need no allowance for what marshaling normalizes, such
+		// as the Four-Octet AS capability every OPEN this package writes;
+		// the fuzz targets assert the values, on inputs small enough to
+		// diff.
 		b1, err := m.AppendBinary(nil)
 		if err != nil {
 			t.Fatalf("failed to marshal corpus message %d: %v", i, err)
@@ -144,13 +159,17 @@ func TestCorpusParse(t *testing.T) {
 			t.Fatalf("failed to re-parse corpus message %d: %v", i, err)
 		}
 
-		if d := diff(t, m, m2); d != "" {
-			t.Fatalf("unexpected re-parsed corpus message %d (-want +got):\n%s", i, d)
+		b2, err := m2.AppendBinary(nil)
+		if err != nil {
+			t.Fatalf("failed to re-marshal corpus message %d: %v", i, err)
+		}
+
+		if !bytes.Equal(b1, b2) {
+			t.Fatalf("corpus message %d is not a fixed point of marshaling:\n b1: %x\n b2: %x", i, b1, b2)
 		}
 	}
 
-	t.Logf("parsed %d UPDATE and %d KEEPALIVE messages, %d attributes (%d unknown, raw only)",
-		updates, keepalives, attrs, rawOnly)
+	t.Logf("parsed %v, %d attributes (%d unknown, raw only)", counts, attrs, rawOnly)
 }
 
 var corpus struct {

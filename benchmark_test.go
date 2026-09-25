@@ -34,6 +34,59 @@ func BenchmarkParseMessage(b *testing.B) {
 	}
 }
 
+// BenchmarkParseUpdate parses one representative eBGP UPDATE: a long
+// AS_PATH, communities, and an MP_REACH_NLRI, the shape a transit feed is
+// mostly made of. It measures the UPDATE body parser alone, the cost every
+// received UPDATE pays before a handler sees it.
+func BenchmarkParseUpdate(b *testing.B) {
+	u := &Update{
+		Attributes: mustAttributes(
+			b,
+			OriginIGP,
+			ASPath{{ASNs: []uint32{
+				64512, 64513, 64514, 64515, 64516,
+				64517, 64518, 64519, 64520, 64521,
+				4242423610, 65536, 65537, 65538, 65539,
+			}}},
+			MED(100),
+			Communities{
+				NewCommunity(64512, 100),
+				NewCommunity(64512, 200),
+				NewCommunity(64513, 300),
+				NewCommunity(65535, 65281),
+			},
+			LargeCommunities{{Global: 4242423610, Local1: 1, Local2: 2}},
+			MPReachNLRI{
+				Family:    Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				NextHop:   netip.MustParseAddr("2001:db8::1"),
+				LinkLocal: netip.MustParseAddr("fe80::1"),
+				NLRI: Prefixes{
+					netip.MustParsePrefix("2001:db8:1::/48"),
+					netip.MustParsePrefix("2001:db8:2::/48"),
+					netip.MustParsePrefix("2001:db8:3::/48"),
+				},
+			},
+		),
+	}
+
+	wire, err := u.AppendBinary(nil)
+	if err != nil {
+		b.Fatalf("failed to marshal UPDATE: %v", err)
+	}
+
+	// The body alone: parseUpdate's input is the message minus its header.
+	body := wire[headerLen:]
+
+	b.SetBytes(int64(len(body)))
+	b.ReportAllocs()
+
+	for b.Loop() {
+		if _, err := parseUpdate(body, nil); err != nil {
+			b.Fatalf("failed to parse UPDATE: %v", err)
+		}
+	}
+}
+
 // BenchmarkRawAttributeParse sweeps the opt-in typed attribute parse path
 // over every path attribute in the corpus.
 func BenchmarkRawAttributeParse(b *testing.B) {
