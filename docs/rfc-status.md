@@ -1,67 +1,62 @@
 # RFC status
 
-A living inventory of BGP-related RFCs and this package's stance on each,
-so unsupported ones are deliberate decisions with a place to be revisited
-rather than silent gaps. Update this file whenever support is added,
-planned, or explicitly rejected.
+What this package implements, what it deliberately leaves to the caller,
+and what it does not do. The package is the BGP wire format, the FSM, and
+the Peer and Server which drive it. Routing state and policy are the
+caller's.
 
 ## Supported
 
-| RFC | Subject | Notes |
+| RFC | Subject | What is implemented |
 |---|---|---|
-| 4271 | BGP-4 | Core wire format; FSM receive and send paths done 2026-08-16 (Peer) |
-| 4760 | Multiprotocol extensions | MP_REACH/MP_UNREACH, first-class; their NLRI is shaped by the family: Prefixes, EVPNRoutes, or RawNLRI for an unmodeled family, which survives parse and re-marshal byte for byte |
-| 6793 | Four-octet ASNs | Native representation; sessions with speakers lacking the capability are rejected |
+| 4271 | BGP-4 | Wire format, FSM, Peer and Server |
+| 4760 | Multiprotocol extensions | MP_REACH_NLRI and MP_UNREACH_NLRI. NLRI is typed by family: Prefixes, EVPNRoutes, or RawNLRI for an unmodeled family, which round-trips byte for byte |
+| 6793 | Four-octet ASNs | Native. A speaker without the capability is rejected |
 | 5492 | Capabilities | OPEN optional parameter type 2 |
 | 1997 | Communities | Typed |
 | 8092 | Large communities | Typed |
-| 2918 | Route refresh | Message support; Identity.RouteRefresh advertises the capability and requires OnRouteRefresh, since replaying the Adj-RIB-Out is the caller's (2026-08-18); SendRouteRefresh enforces negotiation (2026-08-16) |
-| 8950 | IPv4 NLRI with IPv6 next hop | Both directions; ExtendedNextHopCapability, Capability.ExtendedNextHop |
-| draft-walton-bgp-hostname-capability | FQDN capability | Codec only (code 73), done 2026-08-30: FQDNCapability / Capability.FQDN, display-only per the draft; advertised verbatim via Identity.Capabilities |
-| 2545 / 4659 | IPv6 link-local next hop | 32-byte dual next hop form; the VPN families' RD-prefixed 24/48-byte forms (RFC 4659 §3.2.1.1) are managed as a wire encoding detail, zero RDs stripped and restored (2026-08-18) |
-| 7432 / 9136 | EVPN | Done 2026-08-18: L2VPN EVPN family constants and EVPNRoutes, the record framing of RFC 7432 §7 (a route type, a length, an opaque value). Record internals such as RDs, ESIs, MACs, tags, and labels are deliberately uninterpreted: a layer 2 control plane is the caller's, exactly as a RIB is |
-| 6286 | AS-wide BGP identifiers | Documented semantics of Open.ID; collision tiebreak implemented in the FSM, and an internal peer bearing the local identifier is rejected with Bad BGP Identifier per §2.2 (2026-08-16) |
-| 7607 | AS 0 | Done 2026-08-16: NewPeer rejects a zero local ASN, and the FSM answers a peer OPEN carrying ASN 0 with Bad Peer AS |
-| 2385 | TCP-MD5 | Done 2026-08-16: PeerConfig.MD5Password (the peering's key, both directions) / Listener.SetMD5, Linux only; unavailable on a PeerConfig.DialFunc transport; zoned IPv6 link-local peers supported (BGP unnumbered). Deferred: prefix keys and VRF-bound keys (both TCP_MD5SIG_EXT) |
-| 5082 | GTSM | Done 2026-08-16: Dialer.GTSM / ListenConfig.GTSM, Linux only; unavailable on a PeerConfig.DialFunc transport |
-| 4486 | Cease subcodes | Done 2026-08-16: SubcodeCease* constants 1–8, rendered by MessageError |
-| 6608 | FSM error subcodes | Done 2026-08-16: sent by the FSM for an unexpected message, naming the state |
-| 9003 | Shutdown communication | Done 2026-08-16: PeerConfig.ShutdownCommunication attaches it to Administrative Shutdown; Notification.ShutdownCommunication decodes subcodes 2 and 4 |
-| 4456 | Route reflection attributes | Done 2026-08-16: typed ORIGINATOR_ID and CLUSTER_LIST; reflection itself is the caller's RIB |
-| 4360 / 5668 | Extended communities | Done 2026-08-16, deliberately shallow: opaque 8 byte values; RT/SoO constructors and String only |
-| 8097 | Origin validation state extended community | Done 2026-08-29: ValidationState, NewValidationState, ExtendedCommunity.ValidationState, and the "OVS:" String form; ASPath.Origin derives the RFC 6811 origin AS. Validation itself (RFC 6811) and the RTR protocol feeding it (RFC 8210) are the caller's RIB's and a sibling module's respectively; the core carries the result only |
-| 9234 | OTC attribute | Done 2026-08-16: typed OTC, corpus-motivated. Role capability/negotiation out of scope; revisit with the FSM if demanded |
-| 4724 | Graceful restart | Done 2026-08-17, negotiation surface only: capability codec, Identity.GracefulRestart with per-attempt Restart State via Restarting, Session.GracefulRestart, NewEndOfRIB/Update.EndOfRIB. Helper behavior is permanently the caller's RIB's: stale retention, the restart timer, and the End-of-RIB sweep. Restarting-speaker R/F bits are caller-asserted |
-| 8538 | GR notification support / Hard Reset | Done 2026-08-17 at the wire: the N bit is encoded and SubcodeCeaseHardReset is named, so a helper can honor both; retention policy is the caller's. A handler can send Hard Reset via *MessageError today; a shutdown-path knob for it is deferred until demanded |
-| 9494 | Long-lived graceful restart | Done 2026-09-07, negotiation surface only, demanded by lasthop's gaps layer against BIRD (code 71 on every session): capability codec (LongLivedGracefulRestartCapability / Capability.LongLivedGracefulRestart, per family F bit and 24 bit stale time), Identity.LongLivedGracefulRestart advertisement, Session.LongLivedGracefulRestart, and the LLGR_STALE / NO_LLGR well-known communities. The section 4.1 pairing with 4724 is documented, not enforced: the core does not police what the caller advertises. Helper behavior is permanently the caller's RIB's: stale retention, LLGR_STALE depreference, and the long-lived stale timer |
-| 7911 | Add-path | Done 2026-09-02, demanded by bgpdev, in the shape parked 2026-08-16: PathPrefixes of {ID, Prefix} as one more NLRI implementation. Capability codec (AddPathCapability, code 69), Identity.AddPath advertisement, per-family per-direction negotiation into Session.AddPath, Update.NLRIPaths/WithdrawnPaths for the top level fields, and session-aware receive parsing: the FSM publishes the negotiated receive set on its Conn, so handler-delivered NLRI arrives typed while bare ParseMessage stays stateless and never decodes path IDs; ParseMessageAddPath is the entry for an out-of-Conn consumer which knows the negotiation, such as a BMP station (demanded by bmp, 2026-09-02). Prefix shaped families only; path selection and identifier assignment are the caller's RIB's |
-| 7313 | Enhanced route refresh | Done 2026-09-09, demanded by lasthop's gaps layer against BIRD (code 70 on every session): CapabilityEnhancedRouteRefresh, Identity.EnhancedRouteRefresh advertisement (requires RouteRefresh, since the demarcations are ROUTE-REFRESH messages), Session.EnhancedRouteRefresh (both speakers advertised), and RouteRefresh.Subtype, the reserved byte of RFC 2918 now preserved byte for byte as the Message Subtype so any value survives parse and re-marshal. BoRR and EoRR reach OnRouteRefresh in wire order around the UPDATEs they bracket, and SendRouteRefreshBegin / SendRouteRefreshEnd send them; on receipt, a negotiated session delivers the three assigned subtypes and ignores any other per section 5, while an unnegotiated session delivers everything but the two demarcations as RFC 2918 requests with the byte carried as received; the codec, not the FSM, answers a BoRR or EoRR of the wrong length with ROUTE-REFRESH Message Error / Invalid Message Length regardless of negotiation, the one deliberate deviation from section 5's scoping, since a stateless parse cannot know the session. The stale-path timer and stale marking between BoRR and EoRR stay the caller's RIB's, as do the section 4 ordering rules against graceful restart's End-of-RIB |
-| 5065 | AS confederations | Done 2026-09-05 as the follow-up to the add-path commit, wire surface only, demanded by live confed interop (segment type 3 previously reset the session as Malformed AS_PATH): ASSegment.Confed round-trips AS_CONFED_SEQUENCE and AS_CONFED_SET, and ASPath.Origin skips confederation segments. The section 5.3 semantics stay the caller's RIB's: AS_PATH length exclusion, the MED neighbor AS, and confederation loop detection |
-| 7606 | Revised UPDATE error handling | Done 2026-09-25. Parse validates every attribute type this package interprets and classifies each error as a session reset, a treat-as-withdraw, or an attribute discard. A reset is still a *MessageError from parse, so the FSM answers the peer as before. The other two are reported in an *UpdateDiagnostics beside the Update, nil when there is nothing to report: Malformed for a treat-as-withdraw, with the UPDATE's NLRI fields left intact so the consumer can withdraw them, and Discarded for each attribute removed from Attributes. Duplicate attributes (3(g)), missing well-known mandatory attributes (3(d)), and attribute list truncation (section 4) follow. The diagnostics ride beside the Update rather than in it so the Update stays a wire model. They reach a consumer through ParseResult, ReadResult, and the fourth argument of FSMConfig.OnUpdate and PeerConfig.OnUpdate. End-of-RIB is detected on the attribute list after discards. The package logs nothing: a broken encoder can now send malformed UPDATEs at full rate without the reset which used to stop it, so logging and rate limiting are the consumer's. |
+| 4360 / 5668 | Extended communities | Opaque 8 byte values with RT and SoO constructors |
+| 8097 | Origin validation state | ValidationState extended community. ASPath.Origin gives the RFC 6811 origin AS; validation is the caller's |
+| 9234 | OTC attribute | Typed. Role negotiation is not implemented |
+| 4456 | Route reflection attributes | Typed ORIGINATOR_ID and CLUSTER_LIST. Reflection is the caller's |
+| 5065 | AS confederations | AS_CONFED_SEQUENCE and AS_CONFED_SET round-trip; ASPath.Origin skips them. Path length, MED, and loop semantics are the caller's |
+| 2918 | Route refresh | Message, capability, SendRouteRefresh, OnRouteRefresh. Replaying the Adj-RIB-Out is the caller's |
+| 7313 | Enhanced route refresh | Capability, RouteRefresh.Subtype, SendRouteRefreshBegin and SendRouteRefreshEnd. A negotiated session delivers the three assigned subtypes and ignores others; an unnegotiated session delivers all but BoRR and EoRR. A BoRR or EoRR of the wrong length is a Message Error regardless of negotiation. Stale marking is the caller's |
+| 8950 | IPv4 NLRI with IPv6 next hop | Both directions; ExtendedNextHopCapability |
+| 2545 / 4659 | IPv6 link-local next hop | 32 byte dual next hop. VPN families' RD-prefixed next hops carry zero RDs, stripped on parse and restored on marshal |
+| 7432 / 9136 | EVPN | Family constants and EVPNRoutes: route type, length, opaque value. Record internals are the caller's |
+| 6286 | AS-wide BGP identifiers | Collision tiebreak in the FSM; an internal peer with the local identifier is rejected with Bad BGP Identifier |
+| 7607 | AS 0 | NewPeer rejects a zero local ASN; a peer OPEN with ASN 0 draws Bad Peer AS |
+| 2385 | TCP-MD5 | PeerConfig.MD5Password and Listener.SetMD5, Linux only, not on a DialFunc transport. Zoned IPv6 link-local peers work |
+| 5082 | GTSM | Dialer.GTSM and ListenConfig.GTSM, Linux only, not on a DialFunc transport |
+| 4486 | Cease subcodes | SubcodeCease* 1–8 |
+| 6608 | FSM error subcodes | Sent for an unexpected message, naming the state |
+| 9003 | Shutdown communication | PeerConfig.ShutdownCommunication; Notification.ShutdownCommunication decodes subcodes 2 and 4 |
+| 4724 | Graceful restart | Capability, Identity.GracefulRestart, Session.GracefulRestart, NewEndOfRIB and Update.EndOfRIB. Stale retention, the restart timer, and the End-of-RIB sweep are the caller's |
+| 8538 | GR notification support | N bit and SubcodeCeaseHardReset. A handler sends Hard Reset via *MessageError; retention is the caller's |
+| 9494 | Long-lived graceful restart | Capability, Identity.LongLivedGracefulRestart, Session.LongLivedGracefulRestart, LLGR_STALE and NO_LLGR communities. Stale handling is the caller's |
+| 7911 | Add-path | Capability, per-family per-direction negotiation into Session.AddPath, PathPrefixes, Update.NLRIPaths and WithdrawnPaths. Messages read on a Conn parse with the session's negotiation; ParseMessageAddPath is for a consumer outside a Conn. Prefix shaped families only. Path selection and identifier assignment are the caller's |
+| 7606 | Revised UPDATE error handling | Parse classifies each malformed attribute as a session reset, a treat-as-withdraw, or an attribute discard, and the strongest outcome wins. A reset is a *MessageError from parse. The other two are reported in an UpdateDiagnostics beside the Update: Malformed for a treat-as-withdraw, with the NLRI left intact for the consumer to withdraw; Discarded for each attribute removed. An UPDATE which announces nothing reachable but carries a malformed attribute resets. The diagnostics reach a consumer through ParseResult, ReadResult, and the fourth argument of OnUpdate. Nothing is logged; that is the consumer's |
+| draft-walton-bgp-hostname-capability | FQDN capability | FQDNCapability, display only |
 
-## Planned
+## Unsupported
 
-Nothing at present. Every RFC this package has committed to is either
-supported above or listed below with the trigger to revisit it.
-
-## Unsupported: revisit if demanded
-
-| RFC | Subject | Why not / trigger to revisit |
+| RFC | Subject | Why not |
 |---|---|---|
-| 8654 | Extended messages (>4096 bytes) | No mainstream requirement; read path centralizes the max-size constant so support is one line of plumbing plus negotiation |
-| 9072 | Extended optional parameters length | Matters only when OPEN capabilities exceed 255 bytes; we are nowhere near. Typed error (Unsupported Optional Parameter) on receipt. Revisit if interop meets it |
-| 4761 | VPLS | Named (SAFIVPLS) but unmodeled (2026-08-18): its NLRI is carried verbatim as RawNLRI, so a caller is not blocked; legacy relative to EVPN. Revisit if a consumer demands it |
-| 4364 / 8277 | L3VPN and labeled unicast | Route semantics unmodeled: their NLRI is carried verbatim as RawNLRI, and their RD-prefixed next hops (12/24/48 bytes, RDs mandated zero and managed by the codec) fit MPReachNLRI.NextHop, so such attributes typed-parse whole (2026-08-18). SAFIMPLSVPN is named and classified; SAFI 129 shares the next hop encoding and is the trigger to extend rdNextHop if a consumer demands it |
-| 8955 | Flowspec | Unmodeled: its NLRI is carried verbatim as RawNLRI and its absent next hop (length 0) parses and marshals (2026-08-18); the rule grammar is the caller's. Revisit if a consumer demands it |
-| 6396 | MRT | Not a wire feature of this module: a BGP4MP writer is a sibling module built on OnMessage (every message, both directions, with endpoints) and OnStateChange (State numbered as MRT numbers it). `internal/mrt` reads BGP4MP for the test corpus only |
-| 9384 | BFD Down (Cease subcode 10) | Named (SubcodeCeaseBFDDown) and consumable via ResetSession (2026-08-26): a BFD-driven caller sends it plain or wrapped in a Hard Reset. BFD itself (RFC 5880/5881) stays outside this module; a future implementation is its own context |
-| 2842-style dynamic capabilities | Capability renegotiation | FSM deliberate cut |
-| 6472 | AS_SET deprecation (BCP) | Followed in spirit: AS_SET marshals but never auto-splits |
+| 8654 | Extended messages | No requirement. The maximum size is one constant plus negotiation |
+| 9072 | Extended optional parameters length | Matters only past 255 bytes of capabilities. Draws Unsupported Optional Parameter |
+| 4761 | VPLS | Named (SAFIVPLS), NLRI carried as RawNLRI |
+| 4364 / 8277 | L3VPN and labeled unicast | NLRI carried as RawNLRI; RD-prefixed next hops typed-parse |
+| 8955 | Flowspec | NLRI carried as RawNLRI; an absent next hop parses and marshals |
+| 6396 | MRT | A writer belongs on OnMessage and OnStateChange in another module. internal/mrt reads BGP4MP for the test corpus |
+| 9384 | BFD Down | SubcodeCeaseBFDDown is named and sendable via ResetSession. BFD itself is outside this module |
+| 2842-style dynamic capabilities | Capability renegotiation | Not implemented |
+| 6472 | AS_SET deprecation | AS_SET marshals but is never generated |
 
-## Explicitly never
+## Never
 
-| RFC / area | Why |
+| Area | Why |
 |---|---|
-| 4456/4364-style RIB, best-path, policy | A library boundary, not a feature gap: this package is wire format + FSM, permanently |
-| Pre-RFC 6793 2-octet-only sessions | AS4_PATH/AS4_AGGREGATOR reconciliation is intentionally omitted: the most error-prone corner of BGP implementations, serving only pre-2010 gear |
-| 8684 | Multipath TCP | Explicitly disabled on every connection: BGP is single-path, and MPTCP sockets reject TCP_MD5SIG (Go enables MPTCP by default) |
+| RIB, best-path, policy | A library boundary: this package is wire format and FSM |
+| Pre-RFC 6793 sessions | AS4_PATH and AS4_AGGREGATOR reconciliation serves only pre-2010 gear and is the most error-prone corner of BGP |
+| 8684 Multipath TCP | Disabled on every connection: BGP is single-path, and MPTCP sockets reject TCP_MD5SIG |
