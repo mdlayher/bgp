@@ -87,6 +87,14 @@ func FuzzParseMessage(f *testing.F) {
 			return
 		}
 
+		// A treat-as-withdraw UPDATE carries an error whose NOTIFICATION
+		// must marshal like any other.
+		if d := r.Diagnostics; d != nil && d.Malformed != nil {
+			if _, err := d.Malformed.Notification().AppendBinary(nil); err != nil {
+				t.Fatalf("failed to marshal Malformed NOTIFICATION: %v", err)
+			}
+		}
+
 		// Parse must be a fixed point of marshaling: parsing the marshaled
 		// form of a parsed message reproduces both the message and the bytes.
 		b1, err := r.Message.AppendBinary(nil)

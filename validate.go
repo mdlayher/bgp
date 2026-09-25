@@ -1,17 +1,46 @@
-// The syntax rules of every attribute type this package interprets: the
-// length each accepts and, for the few whose data says more than its
-// length does, the content. They sit in one table rather than in the
-// decoder's switch so that every reader of an attribute, the typed decoder
-// today and the receive path's UPDATE validation to come, enforces the same
-// definition of malformed.
+// RFC 7606 error handling for a parsed UPDATE: the syntax rule of each
+// attribute type, the outcome its malformation draws, and Update.classify,
+// which applies them to a whole UPDATE. The file follows that flow rather
+// than one type.
 
 package bgp
 
 import "fmt"
 
-// An attrRule is everything this package knows about the syntax of one
-// attribute type it interprets.
+// An outcome is an RFC 7606, section 2 error handling approach, ordered
+// weakest to strongest so the strongest of several is their maximum, as
+// section 3(h) requires. The AFI/SAFI disable of RFC 4760, section 7 is not
+// among them: this package does not own a session's families.
+type outcome uint8
+
+const (
+	// outcomeOK is no error.
+	outcomeOK outcome = iota
+
+	// outcomeDiscard drops the attribute and processes the rest of the
+	// UPDATE. Only an attribute with no effect on route selection may
+	// draw it.
+	outcomeDiscard
+
+	// outcomeWithdraw treats every route the UPDATE announces as
+	// withdrawn; the session continues.
+	outcomeWithdraw
+
+	// outcomeReset sends a NOTIFICATION and ends the session, as RFC 4271
+	// did for every error.
+	outcomeReset
+)
+
+// An attrRule is the syntax rule of one attribute type this package
+// interprets.
 type attrRule struct {
+	// flags is the Optional and Transitive bits the type's specification
+	// requires, and out the outcome a malformation draws. An out of
+	// outcomeOK marks a type this package does not interpret, which has
+	// no rule.
+	flags AttrFlags
+	out   outcome
+
 	// exact is the only data length the type accepts, or -1 when its
 	// content frames itself. unit, when non-zero, replaces exact with the
 	// size of one repeated element, of which the length must be a non-zero
@@ -20,35 +49,44 @@ type attrRule struct {
 	unit  uint8
 
 	// content marks a type whose data needs more than its length checked;
-	// see checkAttrContent. Most types do not, and the decoder skips the
-	// check for them rather than calling into a switch which would find
-	// nothing to do.
+	// see checkAttrContent. Most types do not, and the check is skipped
+	// for them.
 	content bool
 }
 
 // attrRules is the rule of every attribute type, indexed by the type. It is
-// immutable after initialization, and is an array rather than a type switch
-// because a reader looks up one entry per attribute of every UPDATE: a
-// single load in place of the several switches the same facts would cost.
+// immutable after initialization. It is an array rather than a type switch
+// because the receive path reads one entry per attribute of every UPDATE.
 var attrRules = buildAttrRules()
 
 // buildAttrRules states the rule of each interpreted attribute type. The
-// lengths are each attribute's own specification's.
+// flags come from the typed attributes themselves, so what the receive path
+// enforces and what this package marshals cannot drift apart.
 func buildAttrRules() [256]attrRule {
 	var rs [256]attrRule
 	for i := range rs {
 		rs[i].exact = -1
 	}
 
-	// Each helper below states one type's whole rule.
+	// Only fixed takes an outcome: the two types RFC 7606, section 3(f)
+	// softens to an attribute discard are both fixed length, and every
+	// other interpreted type is section 3(e)'s treat-as-withdraw.
 
 	// fixed states a type whose data is exactly n bytes.
-	fixed := func(a Attribute, n int16) { rs[a.attrType()] = attrRule{exact: n} }
+	fixed := func(a Attribute, out outcome, n int16) {
+		rs[a.attrType()] = attrRule{
+			flags: a.attrFlags(),
+			out:   out,
+			exact: n,
+		}
+	}
 
 	// repeated states a type whose data is a whole number of unit byte
 	// elements, and never empty, as RFC 7606, section 4 requires.
 	repeated := func(a Attribute, unit uint8) {
 		rs[a.attrType()] = attrRule{
+			flags: a.attrFlags(),
+			out:   outcomeWithdraw,
 			exact: -1,
 			unit:  unit,
 		}
@@ -56,20 +94,31 @@ func buildAttrRules() [256]attrRule {
 
 	// framed states a type whose content frames itself, so it has no
 	// length rule of its own.
-	framed := func(a Attribute) { rs[a.attrType()] = attrRule{exact: -1} }
+	framed := func(a Attribute) {
+		rs[a.attrType()] = attrRule{
+			flags: a.attrFlags(),
+			out:   outcomeWithdraw,
+			exact: -1,
+		}
+	}
 
 	// content marks a type whose data says more than its length does; see
 	// checkAttrContent.
 	content := func(a Attribute) { rs[a.attrType()].content = true }
 
-	fixed(Origin(0), 1)
-	fixed(NextHop{}, 4)
-	fixed(MED(0), 4)
-	fixed(LocalPref(0), 4)
-	fixed(AtomicAggregate{}, 0)
-	fixed(Aggregator{}, 8)
-	fixed(OriginatorID(0), 4)
-	fixed(OTC(0), 4)
+	// RFC 7606, section 3(e) and sections 7.1 through 7.5: a malformed
+	// attribute which bears on route selection withdraws the routes the
+	// UPDATE announces. The lengths are each attribute's specification's.
+	// Sections 7.5, 7.9, and 7.10 discard LOCAL_PREF, ORIGINATOR_ID, and
+	// CLUSTER_LIST from an external neighbor; this package does not know
+	// which a session is, so all three are handled as from an internal
+	// one and nothing is silently dropped.
+	fixed(Origin(0), outcomeWithdraw, 1)
+	fixed(NextHop{}, outcomeWithdraw, 4)
+	fixed(MED(0), outcomeWithdraw, 4)
+	fixed(LocalPref(0), outcomeWithdraw, 4)
+	fixed(OriginatorID(0), outcomeWithdraw, 4)
+	fixed(OTC(0), outcomeWithdraw, 4)
 	repeated(Communities(nil), 4)
 	repeated(ClusterList(nil), 4)
 	repeated(ExtendedCommunities(nil), 8)
@@ -77,6 +126,11 @@ func buildAttrRules() [256]attrRule {
 	framed(ASPath(nil))
 	framed(MPReachNLRI{})
 	framed(MPUnreachNLRI{})
+
+	// RFC 7606, section 3(f): neither bears on route selection, so a
+	// malformation costs only the attribute.
+	fixed(AtomicAggregate{}, outcomeDiscard, 0)
+	fixed(Aggregator{}, outcomeDiscard, 8)
 
 	// The marks come last: every helper above assigns a whole rule, so one
 	// set before a helper ran would be overwritten by it.
@@ -88,10 +142,21 @@ func buildAttrRules() [256]attrRule {
 	return rs
 }
 
+// flagsOK reports whether flags are what r's type requires: the Optional
+// and Transitive bits of RFC 7606, section 3(c), and the Partial bit, which
+// RFC 4271, section 4.3 allows only on an optional transitive attribute.
+func (r attrRule) flagsOK(flags AttrFlags) bool {
+	const optTrans = AttrFlagOptional | AttrFlagTransitive
+	if flags&optTrans != r.flags {
+		return false
+	}
+
+	return r.flags == optTrans || flags&AttrFlagPartial == 0
+}
+
 // lengthOK reports whether n bytes of data satisfy r's length rule. The
-// element sizes are switched on rather than divided by, so that every
-// division is by a constant the compiler turns into a multiply: this runs
-// for every attribute of every UPDATE.
+// element sizes are switched on so every division is by a constant: this
+// runs for every attribute of every UPDATE.
 func (r attrRule) lengthOK(n int) bool {
 	switch r.unit {
 	case 0:
@@ -107,10 +172,11 @@ func (r attrRule) lengthOK(n int) bool {
 	}
 }
 
-// validate reports whether the content of a, whose rule is r, is malformed
-// by the rules RFC 7606, sections 4, 5.3, and 7 name. An attribute of a type
-// this package does not interpret has no rules here and is always valid.
-// It is what RawAttribute.parse checks before decoding.
+// validate reports whether a, whose rule is r, is malformed by the rules
+// of RFC 7606, sections 4, 5.3, and 7. A type this package does not
+// interpret has no rule and is always valid. RawAttribute.parse checks it
+// before decoding; the receive path applies the same rules through
+// classifyAttribute, which also needs to know which one failed.
 func (r attrRule) validate(a *RawAttribute) *MessageError {
 	if !r.lengthOK(len(a.Data)) {
 		return badAttrLength(a.Type, len(a.Data))
@@ -123,11 +189,11 @@ func (r attrRule) validate(a *RawAttribute) *MessageError {
 	return nil
 }
 
-// checkAttrContent applies the rules of the four attribute types whose data
-// says more than its length does: the defined values of ORIGIN, the segment
-// framing of AS_PATH, and the minimum lengths RFC 7606, section 5.3 gives
-// the multiprotocol attributes, shorter than which they name no family at
-// all. It is reached only for a type whose rule sets content.
+// checkAttrContent checks the four types whose data says more than its
+// length does: the defined values of ORIGIN, the segment framing of
+// AS_PATH, and the RFC 7606, section 5.3 minimum lengths of the
+// multiprotocol attributes, below which they name no family. It is reached
+// only for a type whose rule sets content.
 func checkAttrContent(a *RawAttribute) *MessageError {
 	switch a.Type {
 	case AttrOrigin:
@@ -159,9 +225,15 @@ func badAttrLength(t AttrType, n int) *MessageError {
 		"invalid %s attribute length %d", attrName(t), n)
 }
 
-// attrName returns the specification's name for an attribute type this
-// package interprets, for the error messages above. It is never reached on a
-// well-formed attribute.
+// badAttrFlags produces the error for an attribute whose flags conflict with
+// its type.
+func badAttrFlags(t AttrType, flags AttrFlags) *MessageError {
+	return updateError(SubcodeAttributeFlagsError, nil,
+		"%s flags %#02x conflict with its type", attrName(t), uint8(flags))
+}
+
+// attrName returns the specification's name for an attribute type, for
+// error messages.
 func attrName(t AttrType) string {
 	switch t {
 	case AttrOrigin:
@@ -199,10 +271,10 @@ func attrName(t AttrType) string {
 	}
 }
 
-// validateASPath reports the malformations of an AS_PATH attribute's data
-// which RFC 7606, section 7.2 names: an unrecognized segment type, a
-// segment whose length overruns the attribute, a trailing byte too short to
-// begin a segment header, and a segment of zero length.
+// validateASPath checks AS_PATH data for the malformations RFC 7606,
+// section 7.2 names: an unknown segment type, a segment which overruns the
+// attribute, a trailing byte too short for a segment header, and an empty
+// segment.
 func validateASPath(b []byte) *MessageError {
 	for len(b) > 0 {
 		if len(b) < 2 {
@@ -232,4 +304,135 @@ func validateASPath(b []byte) *MessageError {
 	}
 
 	return nil
+}
+
+// classifyAttribute reports the outcome RFC 7606 assigns to one attribute
+// and the error describing it: outcomeOK for a well-formed attribute and
+// for any type this package does not interpret. It runs for every
+// attribute of every UPDATE.
+func classifyAttribute(a *RawAttribute) (outcome, *MessageError) {
+	switch r := attrRules[a.Type]; {
+	case r.out == outcomeOK:
+		// RFC 4271, section 6.3: an attribute with the Optional bit clear
+		// is well known, so an uninterpreted one is an unrecognized
+		// well-known attribute, which RFC 7606 does not revise. Any other
+		// unrecognized attribute passes through, per RFC 4271, section 5.
+		if a.Flags&AttrFlagOptional == 0 {
+			return outcomeReset, updateError(SubcodeUnrecognizedWellKnownAttribute, nil,
+				"unrecognized well-known attribute %d", uint8(a.Type))
+		}
+	case !r.flagsOK(a.Flags):
+		return r.out, badAttrFlags(a.Type, a.Flags)
+	case !r.lengthOK(len(a.Data)):
+		return r.out, badAttrLength(a.Type, len(a.Data))
+	case r.content:
+		merr := checkAttrContent(a)
+		if merr == nil {
+			break
+		}
+
+		// RFC 7606, sections 5.3 and 7.11: a malformed multiprotocol
+		// attribute means the NLRI cannot be located, so section 3(j)
+		// keeps the session reset.
+		if a.Type == AttrMPReachNLRI || a.Type == AttrMPUnreachNLRI {
+			return outcomeReset, merr
+		}
+
+		return r.out, merr
+	}
+
+	return outcomeOK, nil
+}
+
+// A typeSet is the set of attribute types an UPDATE carries. It is a value
+// rather than a map because one is built per UPDATE.
+type typeSet [4]uint64
+
+// add records t in the set.
+func (s *typeSet) add(t AttrType) { s[t>>6] |= uint64(1) << (t & 63) }
+
+// has reports whether t is in the set.
+func (s *typeSet) has(t AttrType) bool { return s[t>>6]&(uint64(1)<<(t&63)) != 0 }
+
+// otherThan reports whether the set holds any type but t.
+func (s typeSet) otherThan(t AttrType) bool {
+	s[t>>6] &^= uint64(1) << (t & 63)
+	return s[0]|s[1]|s[2]|s[3] != 0
+}
+
+// classify applies RFC 7606 error handling to a parsed UPDATE. A non-nil
+// error is a session reset, which parseUpdate returns so the FSM answers
+// the peer. Otherwise the UPDATE is delivered with diagnostics: Malformed
+// for a treat-as-withdraw, Discarded for every attribute removed from
+// Attributes. The diagnostics are nil when there is nothing to report.
+func (u *Update) classify() (*UpdateDiagnostics, error) {
+	var (
+		seen      typeSet
+		worst     outcome
+		first     *MessageError
+		kept      int
+		discarded RawAttributes
+	)
+
+	for i := range u.Attributes {
+		a := &u.Attributes[i]
+
+		seen.add(a.Type)
+
+		out, merr := classifyAttribute(a)
+		if out == outcomeReset {
+			return nil, a.echoData(merr)
+		}
+
+		// Section 3(h): the strongest outcome wins, and the first error
+		// of that strength in wire order is the one reported.
+		if out > worst {
+			worst, first = out, a.echoData(merr)
+		}
+
+		if out == outcomeDiscard {
+			discarded = append(discarded, *a)
+			continue
+		}
+
+		if kept != i {
+			u.Attributes[kept] = *a
+		}
+
+		kept++
+	}
+
+	switch {
+	case kept == 0:
+		// An empty list is nil, as parsing zero attributes produces, so an
+		// UPDATE whose every attribute was discarded looks like one which
+		// carried none.
+		u.Attributes = nil
+	case kept < len(u.Attributes):
+		u.Attributes = u.Attributes[:kept]
+	}
+
+	announces := len(u.NLRI) > 0 || len(u.NLRIPaths) > 0 || seen.has(AttrMPReachNLRI)
+
+	if worst == outcomeWithdraw {
+		// RFC 7606, section 5.2: an UPDATE with path attributes other than
+		// MP_UNREACH_NLRI but nothing reachable cannot be trusted to have
+		// had its NLRI located, so section 3(j)'s session reset applies.
+		if !announces && seen.otherThan(AttrMPUnreachNLRI) {
+			return nil, first
+		}
+	} else {
+		// Only a treat-as-withdraw is reported: a discarded attribute's
+		// error describes something already dropped.
+		first = nil
+	}
+
+	if first == nil && discarded == nil {
+		return nil, nil
+	}
+
+	return &UpdateDiagnostics{
+		Malformed: first,
+		Discarded: discarded,
+	}, nil
 }

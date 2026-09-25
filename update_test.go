@@ -1,6 +1,7 @@
 package bgp
 
 import (
+	"encoding/binary"
 	"net/netip"
 	"testing"
 )
@@ -74,6 +75,36 @@ func TestParseUpdateErrors(t *testing.T) {
 			b:       []byte{0x00, 0x00, 0x00, 0x00, 24, 203},
 			code:    NotificationUpdateMessageError,
 			subcode: SubcodeInvalidNetworkField,
+		},
+		{
+			// RFC 7606, section 5.3: too short to name a family, so the
+			// withdrawn routes cannot be located at all.
+			name:    "MP_UNREACH_NLRI too short",
+			b:       updateBody(attrBytes(AttrFlagOptional, AttrMPUnreachNLRI, 0x00, 0x02), nil),
+			code:    NotificationUpdateMessageError,
+			subcode: SubcodeOptionalAttributeError,
+			data:    attrBytes(AttrFlagOptional, AttrMPUnreachNLRI, 0x00, 0x02),
+		},
+		{
+			// An attribute whose Optional bit is clear is well known by
+			// definition, and RFC 7606 does not revise RFC 4271, section
+			// 6.3 for one the receiver does not recognize.
+			name:    "unrecognized well-known attribute",
+			b:       updateBody(concat(originAttr(), asPathAttr(), nextHopAttr(), unknownWellKnownAttr()), v4NLRI()),
+			code:    NotificationUpdateMessageError,
+			subcode: SubcodeUnrecognizedWellKnownAttribute,
+			data:    unknownWellKnownAttr(),
+		},
+		{
+			// RFC 7606, section 5.2: path attributes beyond
+			// MP_UNREACH_NLRI but nothing reachable, so the NLRI cannot be
+			// trusted to have been located and treat-as-withdraw falls back
+			// to a session reset.
+			name:    "malformed attribute with nothing reachable",
+			b:       updateBody(concat(originAttr(), asPathAttr(), shortMEDAttr()), nil),
+			code:    NotificationUpdateMessageError,
+			subcode: SubcodeAttributeLengthError,
+			data:    shortMEDAttr(),
 		},
 	}
 
@@ -289,6 +320,176 @@ func TestParseUpdateAddPathErrors(t *testing.T) {
 	}
 }
 
+// TestParseUpdateMalformed drives the two outcomes of RFC 7606 which still
+// deliver the UPDATE: treat-as-withdraw, which marks it, and attribute
+// discard, which moves the attribute aside. Each case is one wire body and
+// the exact Malformed and Discarded values it must produce.
+func TestParseUpdateMalformed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+
+		// attrs and nlri are the UPDATE's path attribute and NLRI bytes.
+		attrs, nlri []byte
+
+		// subcode and data are the expected Malformed error, or subcode
+		// zero for an UPDATE which is not treated as a withdrawal.
+		subcode uint8
+		data    []byte
+
+		// discarded is the expected Discarded list, and kept the number of
+		// attributes left in Attributes.
+		discarded RawAttributes
+		kept      int
+	}{
+		{
+			// The fault injection case: ORIGIN carrying the Optional bit
+			// is RFC 7606, section 3(c)'s flags conflict.
+			name:    "ORIGIN optional bit set",
+			attrs:   concat(optionalOriginAttr(), asPathAttr(), nextHopAttr()),
+			nlri:    v4NLRI(),
+			subcode: SubcodeAttributeFlagsError,
+			data:    optionalOriginAttr(),
+			kept:    3,
+		},
+		{
+			// RFC 4271, section 4.3 allows the Partial bit only on an
+			// optional transitive attribute; NEXT_HOP is well known.
+			name:    "NEXT_HOP partial bit set",
+			attrs:   concat(originAttr(), asPathAttr(), partialNextHopAttr()),
+			nlri:    v4NLRI(),
+			subcode: SubcodeAttributeFlagsError,
+			data:    partialNextHopAttr(),
+			kept:    3,
+		},
+		{
+			name:    "ORIGIN undefined value",
+			attrs:   concat(attrBytes(AttrFlagTransitive, AttrOrigin, 0x03), asPathAttr(), nextHopAttr()),
+			nlri:    v4NLRI(),
+			subcode: SubcodeInvalidOriginAttribute,
+			data:    attrBytes(AttrFlagTransitive, AttrOrigin, 0x03),
+			kept:    3,
+		},
+		{
+			// RFC 7606, section 7.4: a fixed length attribute of the wrong
+			// length withdraws the UPDATE's routes.
+			name:    "MULTI_EXIT_DISC wrong length",
+			attrs:   concat(originAttr(), asPathAttr(), nextHopAttr(), shortMEDAttr()),
+			nlri:    v4NLRI(),
+			subcode: SubcodeAttributeLengthError,
+			data:    shortMEDAttr(),
+			kept:    4,
+		},
+		{
+			// RFC 7606, section 7.2: a segment which claims no autonomous
+			// systems at all.
+			name:    "AS_PATH empty segment",
+			attrs:   concat(originAttr(), attrBytes(AttrFlagTransitive, AttrASPath, 0x02, 0x00), nextHopAttr()),
+			nlri:    v4NLRI(),
+			subcode: SubcodeMalformedASPath,
+			data:    attrBytes(AttrFlagTransitive, AttrASPath, 0x02, 0x00),
+			kept:    3,
+		},
+		{
+			// RFC 4271, section 4.3: the Partial bit is allowed on an
+			// optional transitive attribute.
+			name:  "AGGREGATOR partial bit set",
+			attrs: concat(originAttr(), asPathAttr(), nextHopAttr(), partialAggregatorAttr()),
+			nlri:  v4NLRI(),
+			kept:  4,
+		},
+		{
+			// RFC 4271, section 5: an unrecognized optional attribute
+			// passes through untouched.
+			name:  "unrecognized optional attribute",
+			attrs: concat(originAttr(), asPathAttr(), nextHopAttr(), unknownOptionalAttr()),
+			nlri:  v4NLRI(),
+			kept:  4,
+		},
+		{
+			// RFC 7606, section 7.6: ATOMIC_AGGREGATE bears on no route
+			// selection, so its malformation costs only itself.
+			name:      "ATOMIC_AGGREGATE non-empty",
+			attrs:     concat(originAttr(), asPathAttr(), nextHopAttr(), attrBytes(AttrFlagTransitive, AttrAtomicAggregate, 0x00)),
+			nlri:      v4NLRI(),
+			discarded: RawAttributes{{Flags: AttrFlagTransitive, Type: AttrAtomicAggregate, Data: []byte{0x00}}},
+			kept:      3,
+		},
+		{
+			// RFC 7606, section 7.7: the two-octet AGGREGATOR of a speaker
+			// without four-octet ASNs, which this package does not accept.
+			name:      "AGGREGATOR two-octet form",
+			attrs:     concat(originAttr(), asPathAttr(), nextHopAttr(), shortAggregatorAttr()),
+			nlri:      v4NLRI(),
+			discarded: RawAttributes{{Flags: AttrFlagOptional | AttrFlagTransitive, Type: AttrAggregator, Data: shortAggregatorAttr()[3:]}},
+			kept:      3,
+		},
+		{
+			// Every attribute discarded leaves the list empty, which is
+			// nil: the same shape an UPDATE which carried none has.
+			name:      "every attribute discarded",
+			attrs:     wellKnownAggregatorAttr(),
+			discarded: RawAttributes{{Flags: AttrFlagTransitive, Type: AttrAggregator, Data: wellKnownAggregatorAttr()[3:]}},
+		},
+		{
+			// RFC 7606, section 3(h): a discard and a withdraw at once are
+			// the withdraw, and the attribute is still recorded.
+			name:      "attribute discard beside treat-as-withdraw",
+			attrs:     concat(originAttr(), asPathAttr(), nextHopAttr(), attrBytes(AttrFlagTransitive, AttrAtomicAggregate, 0x00), shortMEDAttr()),
+			nlri:      v4NLRI(),
+			subcode:   SubcodeAttributeLengthError,
+			data:      shortMEDAttr(),
+			discarded: RawAttributes{{Flags: AttrFlagTransitive, Type: AttrAtomicAggregate, Data: []byte{0x00}}},
+			kept:      4,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r, err := ParseMessage(testMessage(MessageTypeUpdate, updateBody(tt.attrs, tt.nlri)))
+			if err != nil {
+				t.Fatalf("failed to parse UPDATE: %v", err)
+			}
+
+			u := r.Message.(*Update)
+
+			if tt.subcode == 0 {
+				if r.Diagnostics != nil && r.Diagnostics.Malformed != nil {
+					t.Fatalf("unexpected treat-as-withdraw mark: %v", r.Diagnostics.Malformed)
+				}
+			} else {
+				if r.Diagnostics == nil {
+					t.Fatal("no diagnostics for a treat-as-withdraw UPDATE")
+				}
+
+				wantMessageError(t, r.Diagnostics.Malformed, NotificationUpdateMessageError, tt.subcode, tt.data)
+			}
+
+			var discarded RawAttributes
+			if r.Diagnostics != nil {
+				discarded = r.Diagnostics.Discarded
+			}
+
+			if d := diff(t, tt.discarded, discarded); d != "" {
+				t.Fatalf("unexpected discarded attributes (-want +got):\n%s", d)
+			}
+
+			// A discarded attribute is gone from Attributes, and every
+			// other one is left exactly as parsed.
+			if n := len(u.Attributes); n != tt.kept {
+				t.Fatalf("unexpected attributes kept: got %d, want %d", n, tt.kept)
+			}
+
+			if tt.kept == 0 && u.Attributes != nil {
+				t.Fatal("an emptied attribute list must be nil, not an empty slice")
+			}
+		})
+	}
+}
+
 // TestNewEndOfRIB proves the constructor's markers survive the wire and are
 // recognized by their reader counterpart, Update.EndOfRIB.
 func TestNewEndOfRIB(t *testing.T) {
@@ -411,3 +612,84 @@ func TestUpdateEndOfRIB(t *testing.T) {
 		})
 	}
 }
+
+// updateBody frames an UPDATE message body around hand-built path attribute
+// and NLRI bytes, with no withdrawn routes. The Total Attribute Length
+// covers attrs exactly, so a truncated attribute inside it is RFC 7606,
+// section 4's error rather than a framing error of the message.
+func updateBody(attrs, nlri []byte) []byte {
+	b := binary.BigEndian.AppendUint16([]byte{0x00, 0x00}, uint16(len(attrs)))
+	b = append(b, attrs...)
+	return append(b, nlri...)
+}
+
+// attrBytes encodes one path attribute in compact length form: the wire
+// scaffolding of a hand-built UPDATE body.
+func attrBytes(flags AttrFlags, typ AttrType, data ...byte) []byte {
+	return append([]byte{byte(flags), byte(typ), byte(len(data))}, data...)
+}
+
+// concat joins wire fragments into one attribute field.
+func concat(bs ...[]byte) []byte {
+	var b []byte
+	for _, x := range bs {
+		b = append(b, x...)
+	}
+
+	return b
+}
+
+// The canonical wire form of each attribute a hand-built UPDATE body needs,
+// well formed unless the name says otherwise. Each returns a fresh slice, so
+// a case may hand the same bytes to both the body and the expected
+// diagnostic data.
+func originAttr() []byte { return attrBytes(AttrFlagTransitive, AttrOrigin, 0x00) }
+
+func optionalOriginAttr() []byte {
+	return attrBytes(AttrFlagOptional|AttrFlagTransitive, AttrOrigin, 0x00)
+}
+
+// asPathAttr is one AS_SEQUENCE naming the private ASN 64512.
+func asPathAttr() []byte {
+	return attrBytes(AttrFlagTransitive, AttrASPath, 0x02, 0x01, 0x00, 0x00, 0xfc, 0x00)
+}
+
+func nextHopAttr() []byte { return attrBytes(AttrFlagTransitive, AttrNextHop, 192, 0, 2, 1) }
+
+func partialNextHopAttr() []byte {
+	return attrBytes(AttrFlagTransitive|AttrFlagPartial, AttrNextHop, 192, 0, 2, 1)
+}
+
+// shortMEDAttr is a MULTI_EXIT_DISC one byte short of its fixed length.
+func shortMEDAttr() []byte { return attrBytes(AttrFlagOptional, AttrMED, 0x00, 0x00, 0x00) }
+
+// wellKnownAggregatorAttr is an AGGREGATOR whose Optional bit is clear,
+// which its specification requires be set.
+func wellKnownAggregatorAttr() []byte {
+	return attrBytes(AttrFlagTransitive, AttrAggregator, 0x00, 0x00, 0xfc, 0x00, 192, 0, 2, 1)
+}
+
+// shortAggregatorAttr is the two-octet ASN form of AGGREGATOR, which a
+// session this package speaks never negotiates.
+func shortAggregatorAttr() []byte {
+	return attrBytes(AttrFlagOptional|AttrFlagTransitive, AttrAggregator, 0xfc, 0x00, 192, 0, 2, 1)
+}
+
+// unknownWellKnownAttr is an attribute of a type this package does not
+// interpret whose Optional bit is clear, which makes it well known.
+func unknownWellKnownAttr() []byte { return attrBytes(AttrFlagTransitive, AttrType(200), 0x00) }
+
+// unknownOptionalAttr is an optional transitive attribute of a type this
+// package does not interpret.
+func unknownOptionalAttr() []byte {
+	return attrBytes(AttrFlagOptional|AttrFlagTransitive, AttrType(200), 0x00)
+}
+
+// partialAggregatorAttr is a well-formed AGGREGATOR with the Partial bit
+// set, which its optional transitive flags allow.
+func partialAggregatorAttr() []byte {
+	return attrBytes(AttrFlagOptional|AttrFlagTransitive|AttrFlagPartial, AttrAggregator, 0x00, 0x00, 0xfc, 0x00, 192, 0, 2, 1)
+}
+
+// v4NLRI is one IPv4 unicast prefix for the legacy NLRI field, 203.0.113.0/24.
+func v4NLRI() []byte { return []byte{24, 203, 0, 113} }

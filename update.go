@@ -179,6 +179,10 @@ type UpdateDiagnostics struct {
 	// MP_UNREACH_NLRI apply as usual. The Update is left exactly as parsed
 	// so the consumer can do this.
 	//
+	// Parsing an MP_REACH_NLRI to name its prefixes may itself fail; the
+	// handler returns that error to reset the session, as RFC 7606,
+	// section 5.3 requires.
+	//
 	// The error describes the first malformed attribute in wire order,
 	// with the subcode RFC 7606 assigns and the attribute echoed in Data.
 	// Do not send its Notification to the peer: that is the session reset
@@ -194,10 +198,10 @@ type UpdateDiagnostics struct {
 	Discarded RawAttributes
 }
 
-// parseUpdate parses the body of an UPDATE message. The diagnostics are the
-// RFC 7606 result, nil when there is nothing to report; nothing is reported
-// yet, and a malformed attribute list is an error as RFC 4271 requires.
-// addPath is the
+// parseUpdate parses the body of an UPDATE message and applies RFC 7606
+// error handling to it: a session reset is the error, anything less is in
+// the diagnostics, nil when there is nothing to report; see
+// Update.classify. addPath is the
 // session's add-path receive set, the families whose inbound NLRI entries
 // carry path identifiers (RFC 7911): the top level fields of an IPv4
 // unicast entry parse into the path fields, and the multiprotocol attribute
@@ -249,7 +253,14 @@ func parseUpdate(b []byte, addPath []Family) (*Update, *UpdateDiagnostics, error
 		}
 	}
 
-	return &u, nil, nil
+	// The NLRI fields are parsed first: RFC 7606 classifies an attribute
+	// error by whether the routes it affects can be named at all.
+	diag, err := u.classify()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &u, diag, nil
 }
 
 // parseTopLevelPrefixes parses one top level UPDATE prefix field in the

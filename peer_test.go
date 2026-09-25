@@ -1240,6 +1240,119 @@ func TestPeerMalformedUpdate(t *testing.T) {
 	})
 }
 
+// TestPeerTreatAsWithdrawUpdate drives RFC 7606's central promise end to
+// end: an UPDATE whose ORIGIN carries the Optional bit reaches OnUpdate
+// marked for treat-as-withdraw, with the routes it announces left intact for
+// the handler to withdraw, and the session stays Established.
+func TestPeerTreatAsWithdrawUpdate(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		updateC := make(chan updateDelivery, 1)
+		r := newPipeRig(t, PeerConfig{
+			OnUpdate: func(_ context.Context, _ *Peer, u *Update, d *UpdateDiagnostics) error {
+				updateC <- updateDelivery{u: u, d: d}
+				return nil
+			},
+		})
+
+		s := r.acceptScript()
+
+		s.establish(scriptOpen())
+		recv(t, r.estC, "session establishment")
+
+		s.writeRaw(rawMessage(MessageTypeUpdate, updateBody(
+			concat(optionalOriginAttr(), asPathAttr(), nextHopAttr()),
+			v4NLRI(),
+		)))
+
+		got := recv(t, updateC, "update delivery")
+		if got.d == nil {
+			t.Fatal("no diagnostics delivered with a treat-as-withdraw UPDATE")
+		}
+
+		wantMessageError(t, got.d.Malformed, NotificationUpdateMessageError,
+			SubcodeAttributeFlagsError, optionalOriginAttr())
+
+		// The announcement the handler is to withdraw is left exactly as
+		// parsed, and so are the attributes which caused the mark.
+		want := []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}
+		if d := diff(t, want, got.u.NLRI); d != "" {
+			t.Fatalf("unexpected NLRI (-want +got):\n%s", d)
+		}
+
+		if n := len(got.u.Attributes); n != 3 {
+			t.Fatalf("unexpected attributes delivered: got %d, want 3", n)
+		}
+
+		// The session is untouched: the next UPDATE arrives on it, whole
+		// and unmarked, and nothing closed.
+		s.writeRaw(rawMessage(MessageTypeUpdate, updateBody(
+			concat(originAttr(), asPathAttr(), nextHopAttr()),
+			v4NLRI(),
+		)))
+
+		if got := recv(t, updateC, "second update delivery"); got.d != nil {
+			t.Fatalf("unexpected diagnostics: %+v", got.d)
+		}
+
+		select {
+		case c := <-r.closeC:
+			t.Fatalf("session closed unexpectedly: %+v", c)
+		default:
+		}
+	})
+}
+
+// TestPeerUpdateSessionReset verifies that an error RFC 7606 still
+// classifies as a session reset behaves as before: an unrecognized
+// well-known attribute is answered with a NOTIFICATION and the session
+// ends.
+func TestPeerUpdateSessionReset(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		updateC := make(chan *Update, 1)
+		r := newPipeRig(t, PeerConfig{
+			OnUpdate: func(_ context.Context, _ *Peer, u *Update, _ *UpdateDiagnostics) error {
+				updateC <- u
+				return nil
+			},
+		})
+
+		s := r.acceptScript()
+
+		s.establish(scriptOpen())
+		recv(t, r.estC, "session establishment")
+
+		s.writeRaw(rawMessage(MessageTypeUpdate, updateBody(
+			concat(originAttr(), asPathAttr(), nextHopAttr(), unknownWellKnownAttr()),
+			v4NLRI(),
+		)))
+
+		want := &Notification{
+			Code:    NotificationUpdateMessageError,
+			Subcode: SubcodeUnrecognizedWellKnownAttribute,
+			Data:    unknownWellKnownAttr(),
+		}
+
+		s.expectNotification(want)
+		s.expectClosed()
+
+		c := recv(t, r.closeC, "session close")
+		if d := diff(t, want, c.Notification); d != "" {
+			t.Fatalf("unexpected close notification (-want +got):\n%s", d)
+		}
+
+		// Nothing was delivered: a reset UPDATE never reaches the handler.
+		select {
+		case u := <-updateC:
+			t.Fatalf("unexpected UPDATE delivered: %+v", u)
+		default:
+		}
+	})
+}
+
 // The TestPeerHoldExpiry tests pin hold-expiry attribution: a silent peer
 // is answered with Hold Timer Expired, while a reader stalled inside a
 // caller handler is this speaker's own failure, answered with Cease / Out
@@ -2106,4 +2219,11 @@ func TestPeerAddrRequiredToDial(t *testing.T) {
 // configuration tests only need a non-nil one.
 func stubDialFunc(context.Context) (*Conn, error) {
 	panic("stubDialFunc must not be called")
+}
+
+// An updateDelivery is one OnUpdate call: the Update and the RFC 7606
+// diagnostics delivered with it.
+type updateDelivery struct {
+	u *Update
+	d *UpdateDiagnostics
 }
