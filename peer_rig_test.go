@@ -290,12 +290,12 @@ func (s *script) read() Message {
 	s.tb.Helper()
 
 	_ = s.c.SetReadDeadline(time.Now().Add(peerTimeout))
-	m, err := s.c.ReadMessage()
+	r, err := s.c.ReadMessage()
 	if err != nil {
 		s.tb.Fatalf("failed to read message: %v", err)
 	}
 
-	return m
+	return r.Message
 }
 
 // write sends a well-formed message to the Peer.
@@ -388,9 +388,9 @@ func (s *script) expectClosed() {
 	s.tb.Helper()
 
 	_ = s.c.SetReadDeadline(time.Now().Add(peerTimeout))
-	m, err := s.c.ReadMessage()
+	r, err := s.c.ReadMessage()
 	if err == nil {
-		s.tb.Fatalf("expected the connection to close, but read: %T", m)
+		s.tb.Fatalf("expected the connection to close, but read: %T", r.Message)
 	}
 
 	if nerr, ok := errors.AsType[net.Error](err); ok && nerr.Timeout() {

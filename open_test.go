@@ -42,7 +42,7 @@ func TestOpenParseTwoByteASN(t *testing.T) {
 
 	// An OPEN from a speaker which does not advertise the Four-Octet AS
 	// Number capability carries its ASN in the fixed 2 byte field only.
-	got, err := ParseMessage(testMessage(MessageTypeOpen, []byte{
+	r, err := ParseMessage(testMessage(MessageTypeOpen, []byte{
 		0x04,
 		0xfb, 0xf0, // ASN 64496
 		0x00, 0x5a,
@@ -59,7 +59,7 @@ func TestOpenParseTwoByteASN(t *testing.T) {
 		ID:       MustParseIdentifier("192.0.2.1"),
 	}
 
-	if d := diff[Message](t, want, got); d != "" {
+	if d := diff[Message](t, want, r.Message); d != "" {
 		t.Fatalf("unexpected OPEN (-want +got):\n%s", d)
 	}
 }
@@ -82,17 +82,17 @@ func TestParseOpenFourOctet(t *testing.T) {
 		t.Fatalf("failed to marshal OPEN: %v", err)
 	}
 
-	m, err := ParseMessage(b)
+	r, err := ParseMessage(b)
 	if err != nil {
 		t.Fatalf("failed to parse OPEN: %v", err)
 	}
 
-	if !m.(*Open).FourOctetAS {
+	if !r.Message.(*Open).FourOctetAS {
 		t.Fatal("expected FourOctetAS to be set for a peer with the capability")
 	}
 
 	// A legacy speaker without the capability must not report it.
-	m, err = ParseMessage(testMessage(MessageTypeOpen, []byte{
+	r, err = ParseMessage(testMessage(MessageTypeOpen, []byte{
 		0x04,
 		0xfb, 0xf0, // ASN 64496
 		0x00, 0x5a,
@@ -103,7 +103,7 @@ func TestParseOpenFourOctet(t *testing.T) {
 		t.Fatalf("failed to parse legacy OPEN: %v", err)
 	}
 
-	if m.(*Open).FourOctetAS {
+	if r.Message.(*Open).FourOctetAS {
 		t.Fatal("expected FourOctetAS to be unset for a peer without the capability")
 	}
 }
@@ -215,12 +215,12 @@ func TestOpenCapabilitiesMax(t *testing.T) {
 		t.Fatalf("failed to marshal OPEN: %v", err)
 	}
 
-	m, err := ParseMessage(b)
+	r, err := ParseMessage(b)
 	if err != nil {
 		t.Fatalf("failed to parse OPEN: %v", err)
 	}
 
-	caps := m.(*Open).Capabilities
+	caps := r.Message.(*Open).Capabilities
 	if len(caps) != 1 || len(caps[0].Data) != 245 {
 		t.Fatalf("unexpected parsed capabilities: %+v", caps)
 	}
@@ -350,9 +350,9 @@ func TestParseOpenErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			m, err := ParseMessage(testMessage(MessageTypeOpen, tt.b))
-			if m != nil {
-				t.Fatalf("expected nil Message, but got: %v", m)
+			r, err := ParseMessage(testMessage(MessageTypeOpen, tt.b))
+			if r.Message != nil {
+				t.Fatalf("expected nil Message, but got: %v", r.Message)
 			}
 
 			wantMessageError(t, err, tt.code, tt.subcode, tt.data)
@@ -437,12 +437,12 @@ func TestExtendedNextHopCapability(t *testing.T) {
 		t.Fatalf("failed to marshal OPEN: %v", err)
 	}
 
-	m, err := ParseMessage(b)
+	r, err := ParseMessage(b)
 	if err != nil {
 		t.Fatalf("failed to parse OPEN: %v", err)
 	}
 
-	if d := diff[Message](t, o, m); d != "" {
+	if d := diff[Message](t, o, r.Message); d != "" {
 		t.Fatalf("unexpected OPEN (-want +got):\n%s", d)
 	}
 }
@@ -653,14 +653,14 @@ func TestEnhancedRouteRefreshCapability(t *testing.T) {
 		t.Fatalf("unexpected OPEN capability bytes: want suffix % x, got % x", want, b)
 	}
 
-	m, err := ParseMessage(b)
+	r, err := ParseMessage(b)
 	if err != nil {
 		t.Fatalf("failed to parse OPEN: %v", err)
 	}
 
-	got, ok := m.(*Open)
+	got, ok := r.Message.(*Open)
 	if !ok {
-		t.Fatalf("expected an OPEN, but got: %T", m)
+		t.Fatalf("expected an OPEN, but got: %T", r.Message)
 	}
 
 	if d := diff(t, o.Capabilities, got.Capabilities); d != "" {
@@ -688,14 +688,14 @@ func TestOpenParseFourOctetASWins(t *testing.T) {
 		0x41, 0x04, 0x00, 0x01, 0x00, 0x00, // ASN 65536
 	})
 
-	m, err := ParseMessage(b)
+	r, err := ParseMessage(b)
 	if err != nil {
 		t.Fatalf("failed to parse OPEN: %v", err)
 	}
 
-	o, ok := m.(*Open)
+	o, ok := r.Message.(*Open)
 	if !ok {
-		t.Fatalf("expected *Open, but got: %T", m)
+		t.Fatalf("expected *Open, but got: %T", r.Message)
 	}
 
 	if o.ASN != 65536 {
@@ -906,12 +906,12 @@ func TestFQDNCapability(t *testing.T) {
 		t.Fatalf("failed to marshal OPEN: %v", err)
 	}
 
-	m, err := ParseMessage(b)
+	r, err := ParseMessage(b)
 	if err != nil {
 		t.Fatalf("failed to parse OPEN: %v", err)
 	}
 
-	if d := diff[Message](t, o, m); d != "" {
+	if d := diff[Message](t, o, r.Message); d != "" {
 		t.Fatalf("unexpected OPEN (-want +got):\n%s", d)
 	}
 

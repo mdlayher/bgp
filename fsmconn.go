@@ -201,9 +201,9 @@ func (f *FSM) readConn(fc *fsmConn) {
 	defer close(fc.readerDone)
 
 	for {
-		m, err := fc.c.ReadMessage()
+		r, err := fc.c.ReadMessage()
 		fc.lastRecv.Store(fc.sinceBase())
-		if !f.forward(fc, connEvent{fc: fc, msg: m, err: err}) || err != nil {
+		if !f.forward(fc, connEvent{fc: fc, msg: r.Message, err: err}) || err != nil {
 			return
 		}
 
@@ -257,7 +257,7 @@ func (f *FSM) readSession(fc *fsmConn) {
 	}
 
 	for {
-		m, err := fc.c.ReadMessage()
+		r, err := fc.c.ReadMessage()
 		fc.lastRecv.Store(fc.sinceBase())
 		if err != nil {
 			f.forward(fc, connEvent{fc: fc, err: err})
@@ -273,13 +273,13 @@ func (f *FSM) readSession(fc *fsmConn) {
 		default:
 		}
 
-		switch m := m.(type) {
+		switch m := r.Message.(type) {
 		case *Keepalive:
 			if h := f.cfg.OnKeepalive; h != nil && !handle(func() error { return h(fc.sessCtx, f) }) {
 				return
 			}
 		case *Update:
-			if h := f.cfg.OnUpdate; h != nil && !handle(func() error { return h(fc.sessCtx, f, m) }) {
+			if h := f.cfg.OnUpdate; h != nil && !handle(func() error { return h(fc.sessCtx, f, m, r.Diagnostics) }) {
 				return
 			}
 		case *RouteRefresh:

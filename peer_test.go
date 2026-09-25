@@ -400,7 +400,7 @@ func TestPeerAddPath(t *testing.T) {
 				{Family: v4u, Send: true, Receive: true},
 				{Family: v6u, Receive: true},
 			},
-			OnUpdate: func(_ context.Context, _ *Peer, u *Update) error {
+			OnUpdate: func(_ context.Context, _ *Peer, u *Update, _ *UpdateDiagnostics) error {
 				updateC <- u
 				return nil
 			},
@@ -1153,7 +1153,7 @@ func TestPeerSendConnectionReset(t *testing.T) {
 
 	enteredC := make(chan struct{}, 1)
 	r := newTCPRig(t, PeerConfig{
-		OnUpdate: func(ctx context.Context, _ *Peer, _ *Update) error {
+		OnUpdate: func(ctx context.Context, _ *Peer, _ *Update, _ *UpdateDiagnostics) error {
 			enteredC <- struct{}{}
 			<-ctx.Done()
 			return ctx.Err()
@@ -1294,7 +1294,7 @@ func TestPeerHoldExpiryStalledHandler(t *testing.T) {
 		)
 
 		r := newPipeRig(t, PeerConfig{
-			OnUpdate: func(ctx context.Context, _ *Peer, _ *Update) error {
+			OnUpdate: func(ctx context.Context, _ *Peer, _ *Update, _ *UpdateDiagnostics) error {
 				enteredC <- struct{}{}
 				// A well-behaved blocked handler watches the session context,
 				// which the FSM cancels when it sheds the session.
@@ -1346,7 +1346,7 @@ func TestPeerHoldExpiryStallUnderBudget(t *testing.T) {
 		)
 
 		r := newPipeRig(t, PeerConfig{
-			OnUpdate: func(_ context.Context, _ *Peer, _ *Update) error {
+			OnUpdate: func(_ context.Context, _ *Peer, _ *Update, _ *UpdateDiagnostics) error {
 				enteredC <- struct{}{}
 				<-releaseC
 				return nil
@@ -1397,7 +1397,7 @@ func TestPeerStuckHandler(t *testing.T) {
 		)
 
 		r := newPipeRig(t, PeerConfig{
-			OnUpdate: func(_ context.Context, _ *Peer, _ *Update) error {
+			OnUpdate: func(_ context.Context, _ *Peer, _ *Update, _ *UpdateDiagnostics) error {
 				enteredC <- struct{}{}
 				// A misbehaving handler: blocked forever, never watching ctx.
 				<-releaseC
@@ -1458,7 +1458,7 @@ func TestPeerBlockedHandlerKeepalives(t *testing.T) {
 		)
 
 		r := newPipeRig(t, PeerConfig{
-			OnUpdate: func(_ context.Context, _ *Peer, _ *Update) error {
+			OnUpdate: func(_ context.Context, _ *Peer, _ *Update, _ *UpdateDiagnostics) error {
 				enteredC <- struct{}{}
 				<-releaseC
 				return nil
@@ -1525,7 +1525,7 @@ func TestPeerHandlerError(t *testing.T) {
 
 			synctest.Test(t, func(t *testing.T) {
 				r := newPipeRig(t, PeerConfig{
-					OnUpdate: func(_ context.Context, _ *Peer, _ *Update) error {
+					OnUpdate: func(_ context.Context, _ *Peer, _ *Update, _ *UpdateDiagnostics) error {
 						return tt.err
 					},
 				})
@@ -1815,7 +1815,7 @@ func TestPeerEnhancedRouteRefreshDelivery(t *testing.T) {
 		r := newPipeRig(t, PeerConfig{
 			RouteRefresh:         true,
 			EnhancedRouteRefresh: true,
-			OnUpdate: func(_ context.Context, _ *Peer, u *Update) error {
+			OnUpdate: func(_ context.Context, _ *Peer, u *Update, _ *UpdateDiagnostics) error {
 				events <- fmt.Sprintf("UPDATE %s", u.Withdrawn)
 				return nil
 			},
@@ -1983,7 +1983,7 @@ func TestPeerOnUpdateOwnsValues(t *testing.T) {
 		LocalASN: 64496,
 		LocalID:  MustParseIdentifier("192.0.2.1"),
 		Passive:  true,
-		OnUpdate: func(_ context.Context, _ *Peer, u *Update) error {
+		OnUpdate: func(_ context.Context, _ *Peer, u *Update, _ *UpdateDiagnostics) error {
 			got = u
 			return nil
 		},
@@ -1997,7 +1997,7 @@ func TestPeerOnUpdateOwnsValues(t *testing.T) {
 		NLRI:       []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
 	}
 
-	if err := p.fsm.cfg.OnUpdate(context.Background(), p.fsm, borrowed); err != nil {
+	if err := p.fsm.cfg.OnUpdate(context.Background(), p.fsm, borrowed, nil); err != nil {
 		t.Fatalf("failed to invoke the wrapped OnUpdate: %v", err)
 	}
 

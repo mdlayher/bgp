@@ -319,7 +319,7 @@ func collectPaths(t *testing.T) *pathCollector {
 }
 
 // handler is the OnUpdate handler.
-func (c *pathCollector) handler(_ context.Context, _ *bgp.Peer, u *bgp.Update) error {
+func (c *pathCollector) handler(_ context.Context, _ *bgp.Peer, u *bgp.Update, _ *bgp.UpdateDiagnostics) error {
 	if fam, ok := u.EndOfRIB(); ok {
 		c.endOfRIB <- fam
 		return nil

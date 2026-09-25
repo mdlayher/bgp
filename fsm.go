@@ -229,8 +229,12 @@ type FSMConfig struct {
 	// OnUpdate, if set, is called for each UPDATE received while the
 	// session is Established: the feed for an Adj-RIB-In.
 	//
+	// d is the RFC 7606 error handling result, nil for a well-formed
+	// UPDATE. If d.Malformed is set, the handler must treat the UPDATE as
+	// a withdrawal; see [UpdateDiagnostics.Malformed].
+	//
 	// See [FSMConfig.OnEstablished] for the full handler contract.
-	OnUpdate func(ctx context.Context, f *FSM, u *Update) error
+	OnUpdate func(ctx context.Context, f *FSM, u *Update, d *UpdateDiagnostics) error
 
 	// OnRouteRefresh, if set, is called for each ROUTE-REFRESH message
 	// (RFC 2918) received while the session is Established: the peer

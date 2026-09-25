@@ -206,7 +206,7 @@ func TestFRRGracefulRestart(t *testing.T) {
 				{Family: v6Unicast},
 			},
 		},
-		OnUpdate: func(_ context.Context, _ *bgp.Peer, u *bgp.Update) error {
+		OnUpdate: func(_ context.Context, _ *bgp.Peer, u *bgp.Update, _ *bgp.UpdateDiagnostics) error {
 			if family, ok := u.EndOfRIB(); ok {
 				eors <- family
 			}

@@ -70,9 +70,9 @@ func FuzzParseMessage(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, b []byte) {
-		m, err := ParseMessage(b)
+		r, err := ParseMessage(b)
 		if err != nil {
-			if m != nil {
+			if r.Message != nil {
 				t.Fatal("non-nil Message with non-nil error")
 			}
 
@@ -89,7 +89,7 @@ func FuzzParseMessage(f *testing.F) {
 
 		// Parse must be a fixed point of marshaling: parsing the marshaled
 		// form of a parsed message reproduces both the message and the bytes.
-		b1, err := m.AppendBinary(nil)
+		b1, err := r.Message.AppendBinary(nil)
 		if err != nil {
 			// A parsed message need not re-marshal: for example, an OPEN may
 			// spread more capabilities across multiple optional parameters
@@ -97,7 +97,7 @@ func FuzzParseMessage(f *testing.F) {
 			t.Skip("parsed message does not re-marshal")
 		}
 
-		m2, err := ParseMessage(b1)
+		r2, err := ParseMessage(b1)
 		if err != nil {
 			t.Fatalf("failed to re-parse marshaled message: %v", err)
 		}
@@ -106,15 +106,15 @@ func FuzzParseMessage(f *testing.F) {
 		// capability, so a legacy OPEN parsed without it re-parses with
 		// FourOctetAS set: the one field marshaling adds rather than
 		// reproduces. The fixed point holds from the re-parse onward.
-		if o, ok := m.(*Open); ok {
+		if o, ok := r.Message.(*Open); ok {
 			o.FourOctetAS = true
 		}
 
-		if d := diff(t, m, m2); d != "" {
+		if d := diff(t, r.Message, r2.Message); d != "" {
 			t.Fatalf("unexpected re-parsed message (-want +got):\n%s", d)
 		}
 
-		b2, err := m2.AppendBinary(nil)
+		b2, err := r2.Message.AppendBinary(nil)
 		if err != nil {
 			t.Fatalf("failed to re-marshal message: %v", err)
 		}
@@ -200,9 +200,9 @@ func FuzzParseMessageAddPath(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, b []byte) {
-		m, err := ParseMessageAddPath(b, addPath)
+		r, err := ParseMessageAddPath(b, addPath)
 		if err != nil {
-			if m != nil {
+			if r.Message != nil {
 				t.Fatal("non-nil Message with non-nil error")
 			}
 
@@ -217,7 +217,7 @@ func FuzzParseMessageAddPath(f *testing.F) {
 			return
 		}
 
-		if u, ok := m.(*Update); ok {
+		if u, ok := r.Message.(*Update); ok {
 			// A parse under the receive set must never fill a plain IPv4
 			// unicast top level field.
 			if len(u.Withdrawn) > 0 || len(u.NLRI) > 0 {
@@ -240,27 +240,27 @@ func FuzzParseMessageAddPath(f *testing.F) {
 
 		// Parse must be a fixed point of marshaling under the same receive
 		// set, exactly as in FuzzParseMessage.
-		b1, err := m.AppendBinary(nil)
+		b1, err := r.Message.AppendBinary(nil)
 		if err != nil {
 			t.Skip("parsed message does not re-marshal")
 		}
 
-		m2, err := ParseMessageAddPath(b1, addPath)
+		r2, err := ParseMessageAddPath(b1, addPath)
 		if err != nil {
 			t.Fatalf("failed to re-parse marshaled message: %v", err)
 		}
 
 		// A legacy OPEN re-parses with FourOctetAS set, exactly as in
 		// FuzzParseMessage.
-		if o, ok := m.(*Open); ok {
+		if o, ok := r.Message.(*Open); ok {
 			o.FourOctetAS = true
 		}
 
-		if d := diff(t, m, m2); d != "" {
+		if d := diff(t, r.Message, r2.Message); d != "" {
 			t.Fatalf("unexpected re-parsed message (-want +got):\n%s", d)
 		}
 
-		b2, err := m2.AppendBinary(nil)
+		b2, err := r2.Message.AppendBinary(nil)
 		if err != nil {
 			t.Fatalf("failed to re-marshal message: %v", err)
 		}
@@ -347,20 +347,20 @@ func FuzzReadMessage(f *testing.F) {
 		}
 
 		for {
-			m, err := conn.ReadMessage()
+			r, err := conn.ReadMessage()
 			if err != nil {
 				// Any error ends the stream: ReadMessage never consumes a
 				// message it could not parse, so retrying would loop forever.
 				break
 			}
 
-			if m == nil {
+			if r.Message == nil {
 				t.Fatal("nil Message with nil error")
 			}
 
 			// Marshaling a parsed Message must not panic either, and is the
 			// cheapest way to touch every field the parser produced.
-			if _, err := m.AppendBinary(nil); err != nil {
+			if _, err := r.Message.AppendBinary(nil); err != nil {
 				continue
 			}
 		}
@@ -429,12 +429,12 @@ func FuzzRawAttributeParse(f *testing.F) {
 	}
 
 	for _, b := range corpusSeeds(f) {
-		m, err := ParseMessage(b)
+		r, err := ParseMessage(b)
 		if err != nil {
 			f.Fatalf("failed to parse corpus message: %v", err)
 		}
 
-		if u, ok := m.(*Update); ok {
+		if u, ok := r.Message.(*Update); ok {
 			for _, a := range u.Attributes {
 				f.Add(uint8(a.Flags), uint8(a.Type), a.Data)
 			}

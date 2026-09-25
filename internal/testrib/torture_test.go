@@ -313,7 +313,7 @@ func tortureWorker(t *testing.T, tb *testrib.Table, p *bgp.Peer, seed uint64, it
 				return
 			}
 
-			if err := tb.OnUpdate(ctx, p, u); err != nil {
+			if err := tb.OnUpdate(ctx, p, u, nil); err != nil {
 				t.Errorf("valid UPDATE rejected: %v", err)
 				return
 			}

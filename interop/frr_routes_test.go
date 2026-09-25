@@ -336,10 +336,10 @@ type route struct {
 
 // collectRoutes returns an OnUpdate handler and a channel delivering
 // one route per prefix the handler observes being announced.
-func collectRoutes() (func(context.Context, *bgp.Peer, *bgp.Update) error, <-chan route) {
+func collectRoutes() (func(context.Context, *bgp.Peer, *bgp.Update, *bgp.UpdateDiagnostics) error, <-chan route) {
 	routes := make(chan route, 64)
 
-	handler := func(_ context.Context, _ *bgp.Peer, u *bgp.Update) error {
+	handler := func(_ context.Context, _ *bgp.Peer, u *bgp.Update, _ *bgp.UpdateDiagnostics) error {
 		// Attributes shared by every prefix in this UPDATE.
 		var shared route
 		var mp *bgp.MPReachNLRI

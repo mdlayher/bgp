@@ -36,8 +36,8 @@ func BenchmarkParseMessage(b *testing.B) {
 
 // BenchmarkParseUpdate parses one representative eBGP UPDATE: a long
 // AS_PATH, communities, and an MP_REACH_NLRI, the shape a transit feed is
-// mostly made of. It measures the UPDATE body parser alone, the cost every
-// received UPDATE pays before a handler sees it.
+// mostly made of. It measures the UPDATE body parser alone, including the
+// RFC 7606 validation every received UPDATE pays for.
 func BenchmarkParseUpdate(b *testing.B) {
 	u := &Update{
 		Attributes: mustAttributes(
@@ -81,7 +81,7 @@ func BenchmarkParseUpdate(b *testing.B) {
 	b.ReportAllocs()
 
 	for b.Loop() {
-		if _, err := parseUpdate(body, nil); err != nil {
+		if _, _, err := parseUpdate(body, nil); err != nil {
 			b.Fatalf("failed to parse UPDATE: %v", err)
 		}
 	}
@@ -94,12 +94,12 @@ func BenchmarkRawAttributeParse(b *testing.B) {
 	// unknown types which would only measure error construction.
 	var attrs []RawAttribute
 	for _, m := range corpusMessages(b) {
-		msg, err := ParseMessage(m)
+		r, err := ParseMessage(m)
 		if err != nil {
 			b.Fatalf("failed to parse message: %v", err)
 		}
 
-		u, ok := msg.(*Update)
+		u, ok := r.Message.(*Update)
 		if !ok {
 			continue
 		}
@@ -162,14 +162,14 @@ func BenchmarkCorpusAppendBinary(b *testing.B) {
 	)
 
 	for _, raw := range corpusMessages(b) {
-		m, err := ParseMessage(raw)
+		r, err := ParseMessage(raw)
 		if err != nil {
 			b.Fatalf("failed to parse corpus message: %v", err)
 		}
 
 		// The parsed message references the read buffer; clone so the
 		// benchmark holds the whole corpus at once.
-		msgs = append(msgs, detachMessage(b, m))
+		msgs = append(msgs, detachMessage(b, r.Message))
 		total += int64(len(raw))
 	}
 
@@ -224,7 +224,7 @@ func BenchmarkPeerFullTableIngest(b *testing.B) {
 	doneC := make(chan struct{}, 1)
 
 	r := newPipeRig(b, PeerConfig{
-		OnUpdate: func(_ context.Context, _ *Peer, u *Update) error {
+		OnUpdate: func(_ context.Context, _ *Peer, u *Update, _ *UpdateDiagnostics) error {
 			if remaining.Add(-int64(len(u.NLRI))) == 0 {
 				doneC <- struct{}{}
 			}
@@ -263,7 +263,7 @@ func BenchmarkFSMFullTableIngest(b *testing.B) {
 	doneC := make(chan struct{}, 1)
 
 	r := newFSMRig(b, FSMConfig{
-		OnUpdate: func(_ context.Context, _ *FSM, u *Update) error {
+		OnUpdate: func(_ context.Context, _ *FSM, u *Update, _ *UpdateDiagnostics) error {
 			if remaining.Add(-int64(len(u.NLRI))) == 0 {
 				doneC <- struct{}{}
 			}

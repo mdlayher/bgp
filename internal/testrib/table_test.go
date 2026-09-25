@@ -116,7 +116,7 @@ func TestTableOnUpdate(t *testing.T) {
 		Attributes: attrs(t, bgp.OriginIGP, bgp.NextHop(netip.MustParseAddr("192.0.2.1"))),
 	}
 
-	if err := tb.OnUpdate(ctx, p, u); err != nil {
+	if err := tb.OnUpdate(ctx, p, u, nil); err != nil {
 		t.Fatalf("failed to apply IPv4 UPDATE: %v", err)
 	}
 
@@ -126,7 +126,7 @@ func TestTableOnUpdate(t *testing.T) {
 			NextHop: netip.MustParseAddr("2001:db8::1"),
 			NLRI:    bgp.Prefixes{p6},
 		}),
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("failed to apply IPv6 UPDATE: %v", err)
 	}
 
@@ -164,7 +164,7 @@ func TestTableOnUpdate(t *testing.T) {
 	if err := tb.OnUpdate(ctx, p, &bgp.Update{
 		Withdrawn:  []netip.Prefix{pB},
 		Attributes: attrs(t, bgp.MPUnreachNLRI{Family: v6u, NLRI: bgp.Prefixes{p6}}),
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("failed to apply withdrawal: %v", err)
 	}
 
@@ -344,7 +344,7 @@ func TestTableEndOfRIBSweep(t *testing.T) {
 
 	// Only pA is re-announced before End-of-RIB: pB is swept, pA is fresh.
 	announce(t, tb, p, pA.String())
-	if err := tb.OnUpdate(ctx, p, bgp.NewEndOfRIB(v4u)); err != nil {
+	if err := tb.OnUpdate(ctx, p, bgp.NewEndOfRIB(v4u), nil); err != nil {
 		t.Fatalf("failed to apply End-of-RIB: %v", err)
 	}
 
@@ -748,7 +748,7 @@ func announce(t *testing.T, tb *testrib.Table, p *bgp.Peer, prefix string) {
 		Attributes: attrs(t, bgp.OriginIGP, bgp.NextHop(netip.MustParseAddr("192.0.2.1"))),
 	}
 
-	if err := tb.OnUpdate(context.Background(), p, u); err != nil {
+	if err := tb.OnUpdate(context.Background(), p, u, nil); err != nil {
 		t.Fatalf("failed to announce %s: %v", prefix, err)
 	}
 }

@@ -108,7 +108,9 @@ var (
 // [RawAttribute.Parse] returns [Attribute] values which never reference b.
 //
 // A malformed message produces a [*MessageError] describing the
-// Notification RFC 4271 requires in response.
+// Notification RFC 4271 requires in response. An UPDATE which RFC 7606
+// treats as a withdrawal is not an error: it parses, and
+// [ParseResult.Diagnostics] says so.
 //
 // ParseMessage knows no session, so it never decodes RFC 7911 path
 // identifiers. Whether an NLRI entry carries one is negotiated per session
@@ -116,7 +118,7 @@ var (
 // a [Conn] are parsed with their session's negotiation instead. A caller
 // which knows the negotiation itself uses [ParseMessageAddPath]; see
 // [Session.AddPath].
-func ParseMessage(b []byte) (Message, error) {
+func ParseMessage(b []byte) (ParseResult, error) {
 	return parseMessage(b, nil)
 }
 
@@ -132,23 +134,33 @@ func ParseMessage(b []byte) (Message, error) {
 //
 // Only prefix shaped families support add-path; any other family in the
 // set is ignored. The aliasing contract is [ParseMessage]'s.
-func ParseMessageAddPath(b []byte, addPath []Family) (Message, error) {
+func ParseMessageAddPath(b []byte, addPath []Family) (ParseResult, error) {
 	return parseMessage(b, addPath)
+}
+
+// A ParseResult is a parsed [Message] and what the parse found beyond it.
+type ParseResult struct {
+	// Message is the parsed message.
+	Message Message
+
+	// Diagnostics is the RFC 7606 error handling result for an UPDATE. It
+	// is nil for every other message type and for a well-formed UPDATE.
+	Diagnostics *UpdateDiagnostics
 }
 
 // parseMessage implements ParseMessage. addPath is the add-path receive
 // set of the session the message arrived on: the families whose inbound
 // NLRI entries carry path identifiers (RFC 7911), which a session-free
 // parse cannot know. Only UPDATE parsing consumes it.
-func parseMessage(b []byte, addPath []Family) (Message, error) {
+func parseMessage(b []byte, addPath []Family) (ParseResult, error) {
 	if len(b) < headerLen {
-		return nil, headerError(SubcodeBadMessageLength, nil,
+		return ParseResult{}, headerError(SubcodeBadMessageLength, nil,
 			"message too short: %d bytes", len(b))
 	}
 
 	for _, c := range b[:markerLen] {
 		if c != 0xff {
-			return nil, headerError(SubcodeConnectionNotSynchronized, nil,
+			return ParseResult{}, headerError(SubcodeConnectionNotSynchronized, nil,
 				"invalid message header marker")
 		}
 	}
@@ -158,12 +170,12 @@ func parseMessage(b []byte, addPath []Family) (Message, error) {
 	lb := b[markerLen : markerLen+2]
 	length := int(binary.BigEndian.Uint16(lb))
 	if length != len(b) {
-		return nil, headerError(SubcodeBadMessageLength, lb,
+		return ParseResult{}, headerError(SubcodeBadMessageLength, lb,
 			"message length %d does not match input length %d", length, len(b))
 	}
 
 	if length > MaxMessageSize {
-		return nil, headerError(SubcodeBadMessageLength, lb,
+		return ParseResult{}, headerError(SubcodeBadMessageLength, lb,
 			"message length %d exceeds maximum of %d bytes", length, MaxMessageSize)
 	}
 
@@ -171,8 +183,9 @@ func parseMessage(b []byte, addPath []Family) (Message, error) {
 	// failed parse must return an untyped nil rather than the parser's typed
 	// nil boxed in a non-nil interface.
 	var (
-		m   Message
-		err error
+		m    Message
+		diag *UpdateDiagnostics
+		err  error
 	)
 
 	body := b[headerLen:]
@@ -180,12 +193,12 @@ func parseMessage(b []byte, addPath []Family) (Message, error) {
 	case MessageTypeOpen:
 		m, err = parseOpen(body)
 	case MessageTypeUpdate:
-		m, err = parseUpdate(body, addPath)
+		m, diag, err = parseUpdate(body, addPath)
 	case MessageTypeNotification:
 		m, err = parseNotification(body)
 	case MessageTypeKeepalive:
 		if len(body) != 0 {
-			return nil, badLength(len(body),
+			return ParseResult{}, badLength(len(body),
 				"KEEPALIVE message must have an empty body: %d bytes", len(body))
 		}
 
@@ -193,15 +206,18 @@ func parseMessage(b []byte, addPath []Family) (Message, error) {
 	case MessageTypeRouteRefresh:
 		m, err = parseRouteRefresh(b)
 	default:
-		return nil, headerError(SubcodeBadMessageType, b[headerLen-1:headerLen],
+		return ParseResult{}, headerError(SubcodeBadMessageType, b[headerLen-1:headerLen],
 			"unknown message type %d", uint8(typ))
 	}
 
 	if err != nil {
-		return nil, err
+		return ParseResult{}, err
 	}
 
-	return m, nil
+	return ParseResult{
+		Message:     m,
+		Diagnostics: diag,
+	}, nil
 }
 
 // appendHeader begins a message by appending a BGP message header with type

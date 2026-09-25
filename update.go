@@ -166,19 +166,51 @@ func (u *Update) AppendBinary(b []byte) ([]byte, error) {
 	return finishMessage(b, off)
 }
 
-// parseUpdate parses the body of an UPDATE message. addPath is the session's
-// add-path receive set, the families whose inbound NLRI entries carry path
-// identifiers (RFC 7911): the top level fields of an IPv4 unicast entry
-// parse into the path fields, and the multiprotocol attribute of any entry
-// is marked so its typed parse decodes identifiers; see parseMessage.
-func parseUpdate(b []byte, addPath []Family) (*Update, error) {
+// UpdateDiagnostics is what RFC 7606 error handling found in an UPDATE
+// which still parsed. It is returned beside the [Update] rather than stored
+// in it, so an Update marshals back to what was parsed. It is nil when
+// there is nothing to report.
+type UpdateDiagnostics struct {
+	// Malformed is set when RFC 7606 requires the UPDATE be treated as a
+	// withdrawal: an attribute is malformed, but not badly enough to reset
+	// the session. The consumer must withdraw every prefix the UPDATE
+	// announces, in NLRI, NLRIPaths, and every MP_REACH_NLRI attribute,
+	// and must not use its attributes. Withdrawn, WithdrawnPaths, and
+	// MP_UNREACH_NLRI apply as usual. The Update is left exactly as parsed
+	// so the consumer can do this.
+	//
+	// The error describes the first malformed attribute in wire order,
+	// with the subcode RFC 7606 assigns and the attribute echoed in Data.
+	// Do not send its Notification to the peer: that is the session reset
+	// RFC 7606 avoids. This package does not log malformed UPDATEs; a peer
+	// can send them at full rate, so logging and rate limiting are the
+	// consumer's.
+	Malformed *MessageError
+
+	// Discarded holds the attributes removed from the Update's Attributes,
+	// in wire order: those RFC 7606 requires be discarded, and every
+	// repeat of a type after its first occurrence. It is nil when nothing
+	// was removed.
+	Discarded RawAttributes
+}
+
+// parseUpdate parses the body of an UPDATE message. The diagnostics are the
+// RFC 7606 result, nil when there is nothing to report; nothing is reported
+// yet, and a malformed attribute list is an error as RFC 4271 requires.
+// addPath is the
+// session's add-path receive set, the families whose inbound NLRI entries
+// carry path identifiers (RFC 7911): the top level fields of an IPv4
+// unicast entry parse into the path fields, and the multiprotocol attribute
+// of any entry is marked so its typed parse decodes identifiers; see
+// parseMessage.
+func parseUpdate(b []byte, addPath []Family) (*Update, *UpdateDiagnostics, error) {
 	if len(b) < 4 {
-		return nil, badLength(len(b), "UPDATE message too short: %d byte body", len(b))
+		return nil, nil, badLength(len(b), "UPDATE message too short: %d byte body", len(b))
 	}
 
 	wLen := int(binary.BigEndian.Uint16(b[0:2]))
 	if len(b[2:]) < wLen+2 {
-		return nil, updateError(SubcodeMalformedAttributeList, nil,
+		return nil, nil, updateError(SubcodeMalformedAttributeList, nil,
 			"UPDATE withdrawn routes truncated")
 	}
 
@@ -191,7 +223,7 @@ func parseUpdate(b []byte, addPath []Family) (*Update, error) {
 	if wLen > 0 {
 		u.Withdrawn, u.WithdrawnPaths, err = parseTopLevelPrefixes(b[2:2+wLen], v4Paths)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -199,13 +231,13 @@ func parseUpdate(b []byte, addPath []Family) (*Update, error) {
 
 	aLen := int(binary.BigEndian.Uint16(b[0:2]))
 	if len(b[2:]) < aLen {
-		return nil, updateError(SubcodeMalformedAttributeList, nil,
+		return nil, nil, updateError(SubcodeMalformedAttributeList, nil,
 			"UPDATE path attributes truncated")
 	}
 
 	u.Attributes, err = parseRawAttributes(b[2 : 2+aLen])
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	u.Attributes.markAddPath(addPath)
@@ -213,11 +245,11 @@ func parseUpdate(b []byte, addPath []Family) (*Update, error) {
 	if nlri := b[2+aLen:]; len(nlri) > 0 {
 		u.NLRI, u.NLRIPaths, err = parseTopLevelPrefixes(nlri, v4Paths)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
-	return &u, nil
+	return &u, nil, nil
 }
 
 // parseTopLevelPrefixes parses one top level UPDATE prefix field in the

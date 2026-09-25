@@ -41,12 +41,12 @@ func TestRouteRefreshSubtypeRoundTrip(t *testing.T) {
 				t.Fatalf("unexpected ROUTE-REFRESH bytes:\nwant: %x\n got: %x", wantB, b)
 			}
 
-			got, err := ParseMessage(b)
+			r, err := ParseMessage(b)
 			if err != nil {
 				t.Fatalf("failed to parse ROUTE-REFRESH: %v", err)
 			}
 
-			if d := diff[Message](t, want, got); d != "" {
+			if d := diff[Message](t, want, r.Message); d != "" {
 				t.Fatalf("unexpected ROUTE-REFRESH (-want +got):\n%s", d)
 			}
 		})
@@ -67,17 +67,17 @@ func TestRouteRefreshReservedByte(t *testing.T) {
 		0x01, // SAFI unicast
 	})
 
-	m, err := ParseMessage(wire)
+	r, err := ParseMessage(wire)
 	if err != nil {
 		t.Fatalf("failed to parse ROUTE-REFRESH: %v", err)
 	}
 
 	want := &RouteRefresh{Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast}, Subtype: 7}
-	if d := diff[Message](t, want, m); d != "" {
+	if d := diff[Message](t, want, r.Message); d != "" {
 		t.Fatalf("unexpected ROUTE-REFRESH (-want +got):\n%s", d)
 	}
 
-	b, err := m.AppendBinary(nil)
+	b, err := r.Message.AppendBinary(nil)
 	if err != nil {
 		t.Fatalf("failed to marshal ROUTE-REFRESH: %v", err)
 	}

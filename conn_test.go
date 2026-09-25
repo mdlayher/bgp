@@ -124,12 +124,12 @@ func TestConnRoundTrip(t *testing.T) {
 						t.Fatalf("failed to write message: %v", err)
 					}
 
-					got, err := server.ReadMessage()
+					r, err := server.ReadMessage()
 					if err != nil {
 						t.Fatalf("failed to read message: %v", err)
 					}
 
-					if d := diff(t, tt.m, got); d != "" {
+					if d := diff(t, tt.m, r.Message); d != "" {
 						t.Fatalf("unexpected message (-want +got):\n%s", d)
 					}
 
@@ -140,7 +140,7 @@ func TestConnRoundTrip(t *testing.T) {
 						t.Fatalf("failed to marshal want: %v", err)
 					}
 
-					gotB, err := got.AppendBinary(nil)
+					gotB, err := r.Message.AppendBinary(nil)
 					if err != nil {
 						t.Fatalf("failed to marshal got: %v", err)
 					}
@@ -188,14 +188,14 @@ func TestConnReadMessageBurst(t *testing.T) {
 
 	got := make([]Message, 0, len(want))
 	for range want {
-		m, err := server.ReadMessage()
+		r, err := server.ReadMessage()
 		if err != nil {
 			t.Fatalf("failed to read message: %v", err)
 		}
 
 		// The returned Message is only valid until the next ReadMessage
 		// call, so retain a copy instead.
-		got = append(got, detachMessage(t, m))
+		got = append(got, detachMessage(t, r.Message))
 	}
 
 	if err := <-errC; err != nil {
@@ -439,7 +439,7 @@ func TestConnReadMessageDribble(t *testing.T) {
 		errC <- nil
 	}()
 
-	got, err := server.ReadMessage()
+	r, err := server.ReadMessage()
 	if err != nil {
 		t.Fatalf("failed to read message: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestConnReadMessageDribble(t *testing.T) {
 		t.Fatalf("failed to write message: %v", err)
 	}
 
-	if d := diff[Message](t, want, got); d != "" {
+	if d := diff[Message](t, want, r.Message); d != "" {
 		t.Fatalf("unexpected message (-want +got):\n%s", d)
 	}
 }
@@ -489,14 +489,14 @@ func TestConnReadMessageZeroCopy(t *testing.T) {
 
 	view := buf[headerLen+2:]
 
-	m, err := server.ReadMessage()
+	r, err := server.ReadMessage()
 	if err != nil {
 		t.Fatalf("failed to read message: %v", err)
 	}
 
-	n, ok := m.(*Notification)
+	n, ok := r.Message.(*Notification)
 	if !ok {
-		t.Fatalf("expected *Notification, but got: %T", m)
+		t.Fatalf("expected *Notification, but got: %T", r.Message)
 	}
 
 	if d := diff(t, first, n); d != "" {
@@ -527,12 +527,12 @@ func TestConnReadMessageZeroCopy(t *testing.T) {
 		t.Fatalf("failed to write bytes: %v", err)
 	}
 
-	m, err = server.ReadMessage()
+	r, err = server.ReadMessage()
 	if err != nil {
 		t.Fatalf("failed to read message: %v", err)
 	}
 
-	if d := diff[Message](t, second, m); d != "" {
+	if d := diff[Message](t, second, r.Message); d != "" {
 		t.Fatalf("unexpected NOTIFICATION (-want +got):\n%s", d)
 	}
 
@@ -560,12 +560,12 @@ func TestConnWriteMessageBufferReuse(t *testing.T) {
 			t.Fatalf("failed to write message: %v", err)
 		}
 
-		got, err := server.ReadMessage()
+		r, err := server.ReadMessage()
 		if err != nil {
 			t.Fatalf("failed to read message: %v", err)
 		}
 
-		if d := diff(t, want, got); d != "" {
+		if d := diff(t, want, r.Message); d != "" {
 			t.Fatalf("unexpected message (-want +got):\n%s", d)
 		}
 	}
@@ -841,10 +841,10 @@ func detachMessage(tb testing.TB, m Message) Message {
 		tb.Fatalf("failed to marshal message: %v", err)
 	}
 
-	out, err := ParseMessage(b)
+	r, err := ParseMessage(b)
 	if err != nil {
 		tb.Fatalf("failed to parse message: %v", err)
 	}
 
-	return out
+	return r.Message
 }

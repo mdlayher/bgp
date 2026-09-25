@@ -183,17 +183,17 @@ func TestMessageRoundTrip(t *testing.T) {
 				t.Fatalf("failed to marshal message: %v", err)
 			}
 
-			got, err := ParseMessage(b)
+			r, err := ParseMessage(b)
 			if err != nil {
 				t.Fatalf("failed to parse message: %v", err)
 			}
 
-			if d := diff(t, tt.m, got); d != "" {
+			if d := diff(t, tt.m, r.Message); d != "" {
 				t.Fatalf("unexpected message (-want +got):\n%s", d)
 			}
 
 			// The parsed message must reproduce the marshaled bytes exactly.
-			got2, err := got.AppendBinary(nil)
+			got2, err := r.Message.AppendBinary(nil)
 			if err != nil {
 				t.Fatalf("failed to marshal parsed message: %v", err)
 			}
@@ -288,9 +288,9 @@ func TestParseMessageErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			m, err := ParseMessage(tt.b)
-			if m != nil {
-				t.Fatalf("expected nil Message, but got: %v", m)
+			r, err := ParseMessage(tt.b)
+			if r.Message != nil {
+				t.Fatalf("expected nil Message, but got: %v", r.Message)
 			}
 
 			wantMessageError(t, err, tt.code, tt.subcode, tt.data)

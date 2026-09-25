@@ -56,9 +56,18 @@ func Example() {
 			}))
 		},
 
-		OnUpdate: func(_ context.Context, _ *bgp.Peer, u *bgp.Update) error {
+		OnUpdate: func(_ context.Context, _ *bgp.Peer, u *bgp.Update, d *bgp.UpdateDiagnostics) error {
 			// u is fully owned: it may be retained or handed to another
 			// goroutine freely.
+			if d != nil && d.Malformed != nil {
+				// RFC 7606: these routes must not be used. Withdraw
+				// everything the UPDATE announces, here and in any
+				// MP_REACH_NLRI attribute, use none of its attributes, and
+				// keep the session up. See bgp.UpdateDiagnostics.
+				log.Printf("update: treating as a withdrawal: %v: %v", d.Malformed, u.NLRI)
+				return nil
+			}
+
 			log.Printf("update: reachable %v, withdrawn %v", u.NLRI, u.Withdrawn)
 			return nil
 		},
@@ -178,7 +187,7 @@ func Example_dualStack() {
 			return nil
 		},
 
-		OnUpdate: func(_ context.Context, _ *bgp.Peer, u *bgp.Update) error {
+		OnUpdate: func(_ context.Context, _ *bgp.Peer, u *bgp.Update, _ *bgp.UpdateDiagnostics) error {
 			// Parse only the attributes of interest; the rest stay raw.
 			if reach, ok, err := bgp.Lookup[bgp.MPReachNLRI](u.Attributes); err != nil {
 				return err
@@ -342,7 +351,7 @@ func Example_routeRefresh() {
 
 			return advertise(ctx, p)
 		},
-		OnUpdate: func(_ context.Context, _ *bgp.Peer, u *bgp.Update) error {
+		OnUpdate: func(_ context.Context, _ *bgp.Peer, u *bgp.Update, _ *bgp.UpdateDiagnostics) error {
 			log.Printf("update: reachable %v, withdrawn %v", u.NLRI, u.Withdrawn)
 			return nil
 		},
@@ -394,7 +403,7 @@ func ExampleFSM() {
 			return d.Dial(ctx, peer)
 		},
 
-		OnUpdate: func(_ context.Context, _ *bgp.FSM, u *bgp.Update) error {
+		OnUpdate: func(_ context.Context, _ *bgp.FSM, u *bgp.Update, _ *bgp.UpdateDiagnostics) error {
 			// u borrows the connection's read buffer and is valid only for
 			// this call: Clone what outlives it, and nothing else.
 			for _, prefix := range u.Withdrawn {
@@ -455,7 +464,7 @@ func ExamplePeer_DeliverConn() {
 		PeerASN:  64497,
 		Passive:  true,
 
-		OnUpdate: func(_ context.Context, _ *bgp.Peer, u *bgp.Update) error {
+		OnUpdate: func(_ context.Context, _ *bgp.Peer, u *bgp.Update, _ *bgp.UpdateDiagnostics) error {
 			log.Printf("update: reachable %v, withdrawn %v", u.NLRI, u.Withdrawn)
 			return nil
 		},

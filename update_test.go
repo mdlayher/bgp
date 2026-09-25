@@ -81,9 +81,9 @@ func TestParseUpdateErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			m, err := ParseMessage(testMessage(MessageTypeUpdate, tt.b))
-			if m != nil {
-				t.Fatalf("expected nil Message, but got: %v", m)
+			r, err := ParseMessage(testMessage(MessageTypeUpdate, tt.b))
+			if r.Message != nil {
+				t.Fatalf("expected nil Message, but got: %v", r.Message)
 			}
 
 			wantMessageError(t, err, tt.code, tt.subcode, tt.data)
@@ -231,12 +231,12 @@ func TestUpdateAddPathRoundTrip(t *testing.T) {
 		t.Fatalf("failed to marshal UPDATE: %v", err)
 	}
 
-	m, err := ParseMessageAddPath(b, []Family{v4u, v6u})
+	r, err := ParseMessageAddPath(b, []Family{v4u, v6u})
 	if err != nil {
 		t.Fatalf("failed to parse UPDATE: %v", err)
 	}
 
-	got := m.(*Update)
+	got := r.Message.(*Update)
 	if d := diff(t, u, got); d != "" {
 		t.Fatalf("unexpected UPDATE (-want +got):\n%s", d)
 	}
@@ -306,12 +306,12 @@ func TestNewEndOfRIB(t *testing.T) {
 			t.Fatalf("failed to marshal End-of-RIB for %v: %v", f, err)
 		}
 
-		m, err := ParseMessage(b)
+		r, err := ParseMessage(b)
 		if err != nil {
 			t.Fatalf("failed to parse End-of-RIB for %v: %v", f, err)
 		}
 
-		family, ok := m.(*Update).EndOfRIB()
+		family, ok := r.Message.(*Update).EndOfRIB()
 		if !ok {
 			t.Fatalf("marker for %v did not round trip as End-of-RIB", f)
 		}

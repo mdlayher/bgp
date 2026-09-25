@@ -560,7 +560,7 @@ func TestPeerHooksRefuseReentry(t *testing.T) {
 				return nil
 			},
 
-			OnUpdate: func(_ context.Context, p *Peer, _ *Update) error {
+			OnUpdate: func(_ context.Context, p *Peer, _ *Update, _ *UpdateDiagnostics) error {
 				reenter("OnUpdate", p)
 				return nil
 			},

@@ -17,14 +17,14 @@ func TestNotificationDataAliasesInput(t *testing.T) {
 		byte(NotificationCease), 0x02,
 	}, data...))
 
-	m, err := ParseMessage(b)
+	r, err := ParseMessage(b)
 	if err != nil {
 		t.Fatalf("failed to parse NOTIFICATION: %v", err)
 	}
 
-	n, ok := m.(*Notification)
+	n, ok := r.Message.(*Notification)
 	if !ok {
-		t.Fatalf("expected *Notification, but got: %T", m)
+		t.Fatalf("expected *Notification, but got: %T", r.Message)
 	}
 
 	if d := diff(t, data, n.Data); d != "" {
@@ -44,7 +44,7 @@ func TestNotificationDataAliasesInput(t *testing.T) {
 func TestNotificationParseEmptyData(t *testing.T) {
 	t.Parallel()
 
-	m, err := ParseMessage(testMessage(MessageTypeNotification, []byte{
+	r, err := ParseMessage(testMessage(MessageTypeNotification, []byte{
 		byte(NotificationCease), 0x02,
 	}))
 	if err != nil {
@@ -52,7 +52,7 @@ func TestNotificationParseEmptyData(t *testing.T) {
 	}
 
 	want := &Notification{Code: NotificationCease, Subcode: 2}
-	if d := diff[Message](t, want, m); d != "" {
+	if d := diff[Message](t, want, r.Message); d != "" {
 		t.Fatalf("unexpected NOTIFICATION (-want +got):\n%s", d)
 	}
 }

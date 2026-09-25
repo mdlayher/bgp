@@ -600,8 +600,8 @@ func (s *Server) rejectUnconfigured(run *serverRun, c *Conn, raddr netip.AddrPor
 			// One message under the deadline: the OPEN, if the remote is a
 			// live speaker. Anything else observes as nil.
 			var o *Open
-			if m, err := c.ReadMessage(); err == nil {
-				o, _ = m.(*Open)
+			if r, err := c.ReadMessage(); err == nil {
+				o, _ = r.Message.(*Open)
 			}
 
 			f(run.ctx, raddr, o)

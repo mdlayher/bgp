@@ -104,8 +104,12 @@ type PeerConfig struct {
 	// session is Established: the feed for an Adj-RIB-In. The Update is
 	// a fully owned deep copy.
 	//
+	// d is the RFC 7606 error handling result, nil for a well-formed
+	// UPDATE. If d.Malformed is set, the handler must treat the UPDATE as
+	// a withdrawal; see [UpdateDiagnostics.Malformed].
+	//
 	// See [PeerConfig.OnEstablished] for the full handler contract.
-	OnUpdate func(ctx context.Context, p *Peer, u *Update) error
+	OnUpdate func(ctx context.Context, p *Peer, u *Update, d *UpdateDiagnostics) error
 
 	// OnRouteRefresh, if set, is called for each ROUTE-REFRESH message
 	// (RFC 2918) received while the session is Established: the peer
@@ -321,8 +325,8 @@ func NewPeer(addr netip.Addr, c PeerConfig) (*Peer, error) {
 	}
 
 	if h := c.OnUpdate; h != nil {
-		fc.OnUpdate = func(ctx context.Context, _ *FSM, u *Update) error {
-			return h(ctx, p, u.Clone())
+		fc.OnUpdate = func(ctx context.Context, _ *FSM, u *Update, d *UpdateDiagnostics) error {
+			return h(ctx, p, u.Clone(), d.Clone())
 		}
 	}
 

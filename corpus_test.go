@@ -113,14 +113,14 @@ func TestCorpusParse(t *testing.T) {
 	)
 
 	for i, b := range corpusMessages(t) {
-		m, err := ParseMessage(b)
+		r, err := ParseMessage(b)
 		if err != nil {
 			t.Fatalf("failed to parse corpus message %d: %v", i, err)
 		}
 
-		counts[m.messageType()]++
+		counts[r.Message.messageType()]++
 
-		if u, ok := m.(*Update); ok {
+		if u, ok := r.Message.(*Update); ok {
 			for _, a := range u.Attributes {
 				attrs++
 				if _, err := a.Parse(); err != nil {
@@ -149,17 +149,17 @@ func TestCorpusParse(t *testing.T) {
 		// as the Four-Octet AS capability every OPEN this package writes;
 		// the fuzz targets assert the values, on inputs small enough to
 		// diff.
-		b1, err := m.AppendBinary(nil)
+		b1, err := r.Message.AppendBinary(nil)
 		if err != nil {
 			t.Fatalf("failed to marshal corpus message %d: %v", i, err)
 		}
 
-		m2, err := ParseMessage(b1)
+		r2, err := ParseMessage(b1)
 		if err != nil {
 			t.Fatalf("failed to re-parse corpus message %d: %v", i, err)
 		}
 
-		b2, err := m2.AppendBinary(nil)
+		b2, err := r2.Message.AppendBinary(nil)
 		if err != nil {
 			t.Fatalf("failed to re-marshal corpus message %d: %v", i, err)
 		}

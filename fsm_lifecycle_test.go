@@ -189,12 +189,12 @@ func TestFSMGoroutinesEndWithConnect(t *testing.T) {
 				// would expire one before the keepalive it waits for.
 				_ = s.c.SetReadDeadline(time.Time{})
 				for {
-					m, err := s.c.ReadMessage()
+					r, err := s.c.ReadMessage()
 					if err != nil {
 						t.Fatalf("failed to read message: %v", err)
 					}
 
-					if n, ok := m.(*Notification); ok {
+					if n, ok := r.Message.(*Notification); ok {
 						want := &Notification{Code: NotificationHoldTimerExpired}
 						if d := diff(t, want, n); d != "" {
 							t.Fatalf("unexpected NOTIFICATION (-want +got):\n%s", d)
@@ -331,7 +331,7 @@ func TestFSMHooksRefuseReentry(t *testing.T) {
 				return nil
 			},
 
-			OnUpdate: func(_ context.Context, f *FSM, _ *Update) error {
+			OnUpdate: func(_ context.Context, f *FSM, _ *Update, _ *UpdateDiagnostics) error {
 				reenter("OnUpdate", f)
 				return nil
 			},

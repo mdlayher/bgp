@@ -536,13 +536,13 @@ func testSession(tb testing.TB, l *Listener, d *Dialer, md5 string, timeout time
 			tb.Fatalf("failed to write KEEPALIVE: %v", err)
 		}
 
-		m, err := p.r.ReadMessage()
+		r, err := p.r.ReadMessage()
 		if err != nil {
 			tb.Fatalf("failed to read KEEPALIVE: %v", err)
 		}
 
-		if _, ok := m.(*Keepalive); !ok {
-			tb.Fatalf("expected *Keepalive, but got: %T", m)
+		if _, ok := r.Message.(*Keepalive); !ok {
+			tb.Fatalf("expected *Keepalive, but got: %T", r.Message)
 		}
 	}
 }

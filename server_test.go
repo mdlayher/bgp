@@ -416,14 +416,14 @@ func TestServerUnconfiguredPeerTCP(t *testing.T) {
 	expectRejected := func(c *Conn) {
 		t.Helper()
 		_ = c.SetReadDeadline(time.Now().Add(peerTimeout))
-		m, err := c.ReadMessage()
+		r, err := c.ReadMessage()
 		if err != nil {
 			t.Fatalf("failed to read the farewell: %v", err)
 		}
 
-		n, ok := m.(*Notification)
+		n, ok := r.Message.(*Notification)
 		if !ok || n.Code != NotificationCease || n.Subcode != SubcodeCeaseConnectionRejected {
-			t.Fatalf("expected Cease / Connection Rejected, but got: %+v", m)
+			t.Fatalf("expected Cease / Connection Rejected, but got: %+v", r.Message)
 		}
 
 		if _, err := c.ReadMessage(); err == nil {

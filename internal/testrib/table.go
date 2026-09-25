@@ -333,7 +333,7 @@ func (t *Table) push(ctx context.Context, p *bgp.Peer, pending map[bgp.Family]bo
 // ctx is deliberately unused: the handler never blocks, which satisfies the
 // watch-ctx contract by returning promptly, and an UPDATE already received
 // is never wrong to apply.
-func (t *Table) OnUpdate(_ context.Context, p *bgp.Peer, u *bgp.Update) error {
+func (t *Table) OnUpdate(_ context.Context, p *bgp.Peer, u *bgp.Update, _ *bgp.UpdateDiagnostics) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	ps := t.state(p)

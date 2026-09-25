@@ -105,21 +105,35 @@ func (c *Conn) observeLocked(dir Direction, raw []byte, m Message, err error) {
 	})
 }
 
-// ReadMessage reads the next Message, blocking until a complete message
-// arrives, the read deadline expires, or an error occurs.
+// A ReadResult is a [Message] read from a [Conn] and what the parse found
+// beyond it.
 //
-// Like bufio.Scanner, ReadMessage returns values which reference an internal
-// buffer: the Message, and every byte slice reachable from it, are valid
-// only until the next call. To retain data longer, copy it; see
-// ParseMessage.
+// Like bufio.Scanner, a ReadResult references the Conn's internal buffer:
+// the Message, and every byte slice reachable from it, are valid only until
+// the next read on that Conn. To retain data longer, copy it; see
+// [ParseMessage].
+type ReadResult struct {
+	// Message is the message read.
+	Message Message
+
+	// Diagnostics is the RFC 7606 error handling result for an UPDATE. It
+	// is nil for every other message type and for a well-formed UPDATE.
+	Diagnostics *UpdateDiagnostics
+}
+
+// ReadMessage reads the next message, blocking until a complete message
+// arrives, the read deadline expires, or an error occurs. The aliasing
+// contract is [ReadResult]'s.
 //
 // A malformed message produces a *MessageError describing the Notification
 // RFC 4271 requires in response, and is not consumed: the Conn is no longer
-// synchronized with its peer and must be closed.
+// synchronized with its peer and must be closed. An UPDATE which RFC 7606
+// treats as a withdrawal is not an error: it is returned, and
+// ReadResult.Diagnostics says so.
 //
 // A connection closed by the peer between messages produces io.EOF; one
 // closed mid-message produces io.ErrUnexpectedEOF.
-func (c *Conn) ReadMessage() (Message, error) {
+func (c *Conn) ReadMessage() (ReadResult, error) {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 
@@ -133,7 +147,7 @@ func (c *Conn) ReadMessage() (Message, error) {
 			err = io.ErrUnexpectedEOF
 		}
 
-		return nil, err
+		return ReadResult{}, err
 	}
 
 	length := int(binary.BigEndian.Uint16(h[markerLen : markerLen+2]))
@@ -145,7 +159,7 @@ func (c *Conn) ReadMessage() (Message, error) {
 			"message length %d is not between %d and %d bytes",
 			length, headerLen, MaxMessageSize)
 		c.observeLocked(DirectionReceived, h, nil, err)
-		return nil, err
+		return ReadResult{}, err
 	}
 
 	b, err := c.br.Peek(length)
@@ -154,7 +168,7 @@ func (c *Conn) ReadMessage() (Message, error) {
 			err = io.ErrUnexpectedEOF
 		}
 
-		return nil, err
+		return ReadResult{}, err
 	}
 
 	// parseMessage validates the marker and length again. The duplicated
@@ -166,17 +180,19 @@ func (c *Conn) ReadMessage() (Message, error) {
 		ap = *p
 	}
 
-	m, err := parseMessage(b, ap)
-	c.observeLocked(DirectionReceived, b, m, err)
+	r, err := parseMessage(b, ap)
+	c.observeLocked(DirectionReceived, b, r.Message, err)
 	if err != nil {
-		return nil, err
+		return ReadResult{}, err
 	}
 
 	if _, err := c.br.Discard(length); err != nil {
-		return nil, err
+		return ReadResult{}, err
 	}
 
-	return m, nil
+	// The conversion holds while the two types have the same fields, and
+	// fails to compile once they differ.
+	return ReadResult(r), nil
 }
 
 // WriteMessage writes m in a single write, blocking until the write

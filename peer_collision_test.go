@@ -348,7 +348,7 @@ func TestPeerSelfPeering(t *testing.T) {
 		PeerASN:  64497,
 		Families: []Family{v4u, v6u},
 		Dialer:   Dialer{Port: laddr.Port()},
-		OnUpdate: func(_ context.Context, _ *Peer, u *Update) error {
+		OnUpdate: func(_ context.Context, _ *Peer, u *Update, _ *UpdateDiagnostics) error {
 			activeUpdC <- slices.Clone(u.NLRI)
 			return nil
 		},
@@ -377,7 +377,7 @@ func TestPeerSelfPeering(t *testing.T) {
 		PeerASN:  64496,
 		Families: []Family{v4u},
 		Passive:  true,
-		OnUpdate: func(_ context.Context, _ *Peer, u *Update) error {
+		OnUpdate: func(_ context.Context, _ *Peer, u *Update, _ *UpdateDiagnostics) error {
 			passiveUpdC <- slices.Clone(u.NLRI)
 			return nil
 		},
@@ -529,7 +529,7 @@ func TestPeerSelfPeeringUnix(t *testing.T) {
 
 			return NewConn(c), nil
 		},
-		OnUpdate: func(_ context.Context, _ *Peer, u *Update) error {
+		OnUpdate: func(_ context.Context, _ *Peer, u *Update, _ *UpdateDiagnostics) error {
 			activeUpdC <- slices.Clone(u.NLRI)
 			return nil
 		},
@@ -569,7 +569,7 @@ func TestPeerSelfPeeringUnix(t *testing.T) {
 		PeerASN:  64496,
 		Families: []Family{v4u},
 		Passive:  true,
-		OnUpdate: func(_ context.Context, _ *Peer, u *Update) error {
+		OnUpdate: func(_ context.Context, _ *Peer, u *Update, _ *UpdateDiagnostics) error {
 			passiveUpdC <- slices.Clone(u.NLRI)
 			return nil
 		},

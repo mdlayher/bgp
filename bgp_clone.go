@@ -32,6 +32,25 @@ var _UpdateCloneNeedsRegeneration = Update(struct {
 	NLRIPaths      PathPrefixes
 }{})
 
+// Clone makes a deep copy of UpdateDiagnostics.
+// The result aliases no memory with the original.
+func (src *UpdateDiagnostics) Clone() *UpdateDiagnostics {
+	if src == nil {
+		return nil
+	}
+	dst := new(UpdateDiagnostics)
+	*dst = *src
+	dst.Malformed = src.Malformed.Clone()
+	dst.Discarded = src.Discarded.Clone()
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _UpdateDiagnosticsCloneNeedsRegeneration = UpdateDiagnostics(struct {
+	Malformed *MessageError
+	Discarded RawAttributes
+}{})
+
 // Clone makes a deep copy of RawAttribute.
 // The result aliases no memory with the original.
 func (src *RawAttribute) Clone() *RawAttribute {
@@ -167,4 +186,24 @@ func (src *LongLivedGracefulRestart) Clone() *LongLivedGracefulRestart {
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _LongLivedGracefulRestartCloneNeedsRegeneration = LongLivedGracefulRestart(struct {
 	Families []LongLivedGracefulRestartFamily
+}{})
+
+// Clone makes a deep copy of MessageError.
+// The result aliases no memory with the original.
+func (src *MessageError) Clone() *MessageError {
+	if src == nil {
+		return nil
+	}
+	dst := new(MessageError)
+	*dst = *src
+	dst.Data = append(src.Data[:0:0], src.Data...)
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _MessageErrorCloneNeedsRegeneration = MessageError(struct {
+	Code    NotificationCode
+	Subcode uint8
+	Data    []byte
+	msg     string
 }{})

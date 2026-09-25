@@ -232,7 +232,7 @@ func TestPeerOnMessage(t *testing.T) {
 		sawUpdate := make(chan bool, 1)
 		r := newPipeRig(t, PeerConfig{
 			OnMessage: func(_ *Peer, e MessageEvent) { l.tap(e) },
-			OnUpdate: func(_ context.Context, _ *Peer, _ *Update) error {
+			OnUpdate: func(_ context.Context, _ *Peer, _ *Update, _ *UpdateDiagnostics) error {
 				// The tap ran on this goroutine before the handler.
 				sawUpdate <- len(l.types(DirectionReceived)) > 0 &&
 					l.types(DirectionReceived)[len(l.types(DirectionReceived))-1] == "UPDATE"
