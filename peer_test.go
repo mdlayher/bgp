@@ -444,11 +444,18 @@ func TestPeerAddPath(t *testing.T) {
 			{ID: 2, Prefix: netip.MustParsePrefix("2001:db8:1::/48")},
 		}
 
-		mp, err := MarshalAttributes(MPReachNLRI{
-			Family:  v6u,
-			NextHop: netip.MustParseAddr("2001:db8::1"),
-			NLRI:    nlri,
-		})
+		// The well-known mandatory attributes ride along, so the UPDATE
+		// arrives well formed rather than as RFC 7606's treat-as-withdraw.
+		mp, err := MarshalAttributes(
+			OriginIGP,
+			ASPath{{ASNs: []uint32{64497}}},
+			NextHop(netip.MustParseAddr("192.0.2.2")),
+			MPReachNLRI{
+				Family:  v6u,
+				NextHop: netip.MustParseAddr("2001:db8::1"),
+				NLRI:    nlri,
+			},
+		)
 		if err != nil {
 			t.Fatalf("failed to marshal attributes: %v", err)
 		}
@@ -464,7 +471,7 @@ func TestPeerAddPath(t *testing.T) {
 		// The delivered MP_REACH_NLRI is marked add-path, because v6u is in
 		// the negotiated receive set: the want asserts the mark rather than
 		// leaving it uncompared.
-		sent.Attributes[0].addPath = true
+		sent.Attributes[3].addPath = true
 		s.write(sent)
 
 		got := recv(t, updateC, "update delivery")

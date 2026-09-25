@@ -133,6 +133,8 @@ func TestMessageRoundTrip(t *testing.T) {
 			m: &Update{
 				Attributes: mustAttributes(
 					t,
+					OriginIGP,
+					ASPath{{ASNs: []uint32{64496}}},
 					MPReachNLRI{
 						Family:  Family{AFI: AFIIPv4, SAFI: SAFIUnicast},
 						NextHop: netip.MustParseAddr("2001:db8::1"),

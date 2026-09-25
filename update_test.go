@@ -196,18 +196,26 @@ func TestUpdateAddPathRoundTrip(t *testing.T) {
 		{ID: 2, Prefix: netip.MustParsePrefix("2001:db8:1::/48")},
 	}
 
-	mp, err := MarshalAttributes(MPReachNLRI{
-		Family:  v6u,
-		NextHop: netip.MustParseAddr("2001:db8::1"),
-		NLRI:    nlri,
-	})
+	// The well-known mandatory attributes ride along, so the UPDATE is one
+	// a receiver applying RFC 7606, section 3(d) would not treat as a
+	// withdrawal: that is not this test's subject.
+	mp, err := MarshalAttributes(
+		OriginIGP,
+		ASPath{{ASNs: []uint32{64512}}},
+		NextHop(netip.MustParseAddr("192.0.2.1")),
+		MPReachNLRI{
+			Family:  v6u,
+			NextHop: netip.MustParseAddr("2001:db8::1"),
+			NLRI:    nlri,
+		},
+	)
 	if err != nil {
 		t.Fatalf("failed to marshal attributes: %v", err)
 	}
 
 	// The parsed MP_REACH_NLRI is marked add-path, since v6u is in the
 	// receive set, so the want asserts the mark rather than ignoring it.
-	mp[0].addPath = true
+	mp[3].addPath = true
 
 	u := &Update{
 		WithdrawnPaths: PathPrefixes{{ID: 7, Prefix: netip.MustParsePrefix("192.0.2.0/24")}},
