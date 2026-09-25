@@ -77,6 +77,20 @@ func TestParseUpdateErrors(t *testing.T) {
 			subcode: SubcodeInvalidNetworkField,
 		},
 		{
+			// RFC 7606, section 3(g): a repeated multiprotocol attribute
+			// leaves the routes the UPDATE carries ambiguous.
+			name:    "duplicate MP_REACH_NLRI",
+			b:       updateBody(concat(originAttr(), asPathAttr(), mpReachAttr(), mpReachAttr()), nil),
+			code:    NotificationUpdateMessageError,
+			subcode: SubcodeMalformedAttributeList,
+		},
+		{
+			name:    "duplicate MP_UNREACH_NLRI",
+			b:       updateBody(concat(mpUnreachAttr(), mpUnreachAttr()), nil),
+			code:    NotificationUpdateMessageError,
+			subcode: SubcodeMalformedAttributeList,
+		},
+		{
 			// RFC 7606, section 5.3: too short to name a family, so the
 			// withdrawn routes cannot be located at all.
 			name:    "MP_UNREACH_NLRI too short",
@@ -408,6 +422,15 @@ func TestParseUpdateMalformed(t *testing.T) {
 			kept:  4,
 		},
 		{
+			// RFC 7606, section 3(g): the first occurrence stands and the
+			// rest are discarded, unexamined.
+			name:      "duplicate ORIGIN",
+			attrs:     concat(originAttr(), asPathAttr(), nextHopAttr(), attrBytes(AttrFlagTransitive, AttrOrigin, 0x01)),
+			nlri:      v4NLRI(),
+			discarded: RawAttributes{{Flags: AttrFlagTransitive, Type: AttrOrigin, Data: []byte{0x01}}},
+			kept:      3,
+		},
+		{
 			// RFC 7606, section 7.6: ATOMIC_AGGREGATE bears on no route
 			// selection, so its malformation costs only itself.
 			name:      "ATOMIC_AGGREGATE non-empty",
@@ -689,6 +712,23 @@ func unknownOptionalAttr() []byte {
 // set, which its optional transitive flags allow.
 func partialAggregatorAttr() []byte {
 	return attrBytes(AttrFlagOptional|AttrFlagTransitive|AttrFlagPartial, AttrAggregator, 0x00, 0x00, 0xfc, 0x00, 192, 0, 2, 1)
+}
+
+func mpReachAttr() []byte {
+	data, err := MPReachNLRI{
+		Family:  Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+		NextHop: netip.MustParseAddr("2001:db8::1"),
+		NLRI:    Prefixes{netip.MustParsePrefix("2001:db8:1::/48")},
+	}.appendData(nil)
+	if err != nil {
+		panic("bgp: failed to encode MP_REACH_NLRI: " + err.Error())
+	}
+
+	return attrBytes(AttrFlagOptional, AttrMPReachNLRI, data...)
+}
+
+func mpUnreachAttr() []byte {
+	return attrBytes(AttrFlagOptional, AttrMPUnreachNLRI, 0x00, 0x02, 0x01)
 }
 
 // v4NLRI is one IPv4 unicast prefix for the legacy NLRI field, 203.0.113.0/24.

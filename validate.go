@@ -344,12 +344,21 @@ func classifyAttribute(a *RawAttribute) (outcome, *MessageError) {
 	return outcomeOK, nil
 }
 
-// A typeSet is the set of attribute types an UPDATE carries. It is a value
-// rather than a map because one is built per UPDATE.
+// A typeSet is the set of attribute types an UPDATE carries, for the
+// duplicate detection of RFC 7606, section 3(g). It is a value rather than
+// a map because one is built per UPDATE.
 type typeSet [4]uint64
 
-// add records t in the set.
-func (s *typeSet) add(t AttrType) { s[t>>6] |= uint64(1) << (t & 63) }
+// add records t in the set, reporting false when t was already present.
+func (s *typeSet) add(t AttrType) bool {
+	word, bit := t>>6, uint64(1)<<(t&63)
+	if s[word]&bit != 0 {
+		return false
+	}
+
+	s[word] |= bit
+	return true
+}
 
 // has reports whether t is in the set.
 func (s *typeSet) has(t AttrType) bool { return s[t>>6]&(uint64(1)<<(t&63)) != 0 }
@@ -377,7 +386,18 @@ func (u *Update) classify() (*UpdateDiagnostics, error) {
 	for i := range u.Attributes {
 		a := &u.Attributes[i]
 
-		seen.add(a.Type)
+		// RFC 7606, section 3(g): a repeated multiprotocol attribute
+		// resets the session. For any other type the first occurrence
+		// stands and the rest are discarded unexamined.
+		if !seen.add(a.Type) {
+			if a.Type == AttrMPReachNLRI || a.Type == AttrMPUnreachNLRI {
+				return nil, updateError(SubcodeMalformedAttributeList, nil,
+					"duplicate multiprotocol attribute %d", uint8(a.Type))
+			}
+
+			discarded = append(discarded, *a)
+			continue
+		}
 
 		out, merr := classifyAttribute(a)
 		if out == outcomeReset {
