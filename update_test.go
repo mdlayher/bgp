@@ -406,6 +406,30 @@ func TestParseUpdateMalformed(t *testing.T) {
 			kept:    3,
 		},
 		{
+			// RFC 7606, section 3(d).
+			name:    "ORIGIN missing beside legacy NLRI",
+			attrs:   concat(asPathAttr(), nextHopAttr()),
+			nlri:    v4NLRI(),
+			subcode: SubcodeMissingWellKnownAttribute,
+			data:    []byte{byte(AttrOrigin)},
+			kept:    2,
+		},
+		{
+			name:    "NEXT_HOP missing beside legacy NLRI",
+			attrs:   concat(originAttr(), asPathAttr()),
+			nlri:    v4NLRI(),
+			subcode: SubcodeMissingWellKnownAttribute,
+			data:    []byte{byte(AttrNextHop)},
+			kept:    2,
+		},
+		{
+			// RFC 4760, section 3 reclassifies NEXT_HOP as discretionary
+			// for routes carried in MP_REACH_NLRI, which names its own.
+			name:  "NEXT_HOP absent beside MP_REACH_NLRI only",
+			attrs: concat(originAttr(), asPathAttr(), mpReachAttr()),
+			kept:  3,
+		},
+		{
 			// RFC 4271, section 4.3: the Partial bit is allowed on an
 			// optional transitive attribute.
 			name:  "AGGREGATOR partial bit set",

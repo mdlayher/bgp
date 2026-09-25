@@ -345,8 +345,9 @@ func classifyAttribute(a *RawAttribute) (outcome, *MessageError) {
 }
 
 // A typeSet is the set of attribute types an UPDATE carries, for the
-// duplicate detection of RFC 7606, section 3(g). It is a value rather than
-// a map because one is built per UPDATE.
+// duplicate detection of RFC 7606, section 3(g) and the well-known
+// mandatory check of 3(d). It is a value rather than a map because one is
+// built per UPDATE.
 type typeSet [4]uint64
 
 // add records t in the set, reporting false when t was already present.
@@ -432,7 +433,31 @@ func (u *Update) classify() (*UpdateDiagnostics, error) {
 		u.Attributes = u.Attributes[:kept]
 	}
 
-	announces := len(u.NLRI) > 0 || len(u.NLRIPaths) > 0 || seen.has(AttrMPReachNLRI)
+	// RFC 4271, section 4.3: an UPDATE which advertises routes carries the
+	// well-known mandatory attributes, and RFC 7606, section 3(d) makes
+	// their absence a treat-as-withdraw. RFC 4760, section 3 makes
+	// NEXT_HOP discretionary for routes in MP_REACH_NLRI, which names its
+	// own next hop, so it is required only beside the legacy NLRI field.
+	legacy := len(u.NLRI) > 0 || len(u.NLRIPaths) > 0
+	announces := legacy || seen.has(AttrMPReachNLRI)
+
+	if announces && worst < outcomeWithdraw {
+		var missing AttrType
+		switch {
+		case !seen.has(AttrOrigin):
+			missing = AttrOrigin
+		case !seen.has(AttrASPath):
+			missing = AttrASPath
+		case legacy && !seen.has(AttrNextHop):
+			missing = AttrNextHop
+		}
+
+		if missing != 0 {
+			worst = outcomeWithdraw
+			first = updateError(SubcodeMissingWellKnownAttribute, []byte{byte(missing)},
+				"missing well-known mandatory attribute %d", uint8(missing))
+		}
+	}
 
 	if worst == outcomeWithdraw {
 		// RFC 7606, section 5.2: an UPDATE with path attributes other than
