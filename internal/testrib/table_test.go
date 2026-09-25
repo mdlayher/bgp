@@ -58,16 +58,26 @@ func TestTableBest(t *testing.T) {
 		p6 = netip.MustParsePrefix("2001:db8::/32")
 
 		u4 = &bgp.Update{
-			NLRI:       []netip.Prefix{p4},
-			Attributes: attrs(t, bgp.OriginIGP, bgp.NextHop(netip.MustParseAddr("192.0.2.1"))),
+			NLRI: []netip.Prefix{p4},
+			Attributes: attrs(
+				t,
+				bgp.OriginIGP,
+				bgp.ASPath{{ASNs: []uint32{64512}}},
+				bgp.NextHop(netip.MustParseAddr("192.0.2.1")),
+			),
 		}
 
 		u6 = &bgp.Update{
-			Attributes: attrs(t, bgp.OriginIGP, bgp.MPReachNLRI{
-				Family:  v6u,
-				NextHop: netip.MustParseAddr("2001:db8::1"),
-				NLRI:    bgp.Prefixes{p6},
-			}),
+			Attributes: attrs(
+				t,
+				bgp.OriginIGP,
+				bgp.ASPath{{ASNs: []uint32{64512}}},
+				bgp.MPReachNLRI{
+					Family:  v6u,
+					NextHop: netip.MustParseAddr("2001:db8::1"),
+					NLRI:    bgp.Prefixes{p6},
+				},
+			),
 		}
 	)
 
@@ -112,8 +122,13 @@ func TestTableOnUpdate(t *testing.T) {
 	// Announce two IPv4 prefixes sharing one attribute slice, and one IPv6
 	// prefix via MP_REACH_NLRI.
 	u := &bgp.Update{
-		NLRI:       []netip.Prefix{pB, pA},
-		Attributes: attrs(t, bgp.OriginIGP, bgp.NextHop(netip.MustParseAddr("192.0.2.1"))),
+		NLRI: []netip.Prefix{pB, pA},
+		Attributes: attrs(
+			t,
+			bgp.OriginIGP,
+			bgp.ASPath{{ASNs: []uint32{64512}}},
+			bgp.NextHop(netip.MustParseAddr("192.0.2.1")),
+		),
 	}
 
 	if err := tb.OnUpdate(ctx, p, u, nil); err != nil {
@@ -121,11 +136,16 @@ func TestTableOnUpdate(t *testing.T) {
 	}
 
 	if err := tb.OnUpdate(ctx, p, &bgp.Update{
-		Attributes: attrs(t, bgp.OriginIGP, bgp.MPReachNLRI{
-			Family:  v6u,
-			NextHop: netip.MustParseAddr("2001:db8::1"),
-			NLRI:    bgp.Prefixes{p6},
-		}),
+		Attributes: attrs(
+			t,
+			bgp.OriginIGP,
+			bgp.ASPath{{ASNs: []uint32{64512}}},
+			bgp.MPReachNLRI{
+				Family:  v6u,
+				NextHop: netip.MustParseAddr("2001:db8::1"),
+				NLRI:    bgp.Prefixes{p6},
+			},
+		),
 	}, nil); err != nil {
 		t.Fatalf("failed to apply IPv6 UPDATE: %v", err)
 	}
@@ -141,8 +161,8 @@ func TestTableOnUpdate(t *testing.T) {
 		t.Fatalf("unexpected IPv6 unicast routes (-want +got):\n%s", d)
 	}
 
-	if len(r6[0].Attributes) != 2 {
-		t.Fatalf("expected the IPv6 route to retain 2 attributes, but got: %v", r6[0].Attributes)
+	if len(r6[0].Attributes) != 3 {
+		t.Fatalf("expected the IPv6 route to retain 3 attributes, but got: %v", r6[0].Attributes)
 	}
 
 	// The Table copies on insert: mutating the caller's UPDATE after the
@@ -174,6 +194,77 @@ func TestTableOnUpdate(t *testing.T) {
 
 	if n := len(tb.Routes(p, v6u)); n != 0 {
 		t.Fatalf("expected no IPv6 unicast routes after withdrawal, but got %d", n)
+	}
+}
+
+// TestTableOnUpdateTreatAsWithdraw proves an UPDATE RFC 7606 marks as a
+// withdrawal withdraws what it announces, in the NLRI field and in
+// MP_REACH_NLRI, and still applies what it withdraws.
+func TestTableOnUpdateTreatAsWithdraw(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		tb  = newTable(t, testrib.Config{})
+		p   = testPeer(t)
+
+		pA = netip.MustParsePrefix("198.51.100.0/24")
+		pB = netip.MustParsePrefix("203.0.113.0/24")
+		p6 = netip.MustParsePrefix("2001:db8::/32")
+	)
+
+	if err := tb.OnEstablished(ctx, p, session(false, nil, v4u, v6u)); err != nil {
+		t.Fatalf("failed to establish: %v", err)
+	}
+
+	if err := tb.OnUpdate(ctx, p, &bgp.Update{
+		NLRI: []netip.Prefix{pA, pB},
+		Attributes: attrs(
+			t,
+			bgp.OriginIGP,
+			bgp.ASPath{{ASNs: []uint32{64512}}},
+			bgp.MPReachNLRI{
+				Family:  v6u,
+				NextHop: netip.MustParseAddr("2001:db8::1"),
+				NLRI:    bgp.Prefixes{p6},
+			},
+		),
+	}, nil); err != nil {
+		t.Fatalf("failed to apply UPDATE: %v", err)
+	}
+
+	// Marked as a withdrawal: pA and p6 are announced, so they go; pB is
+	// withdrawn outright.
+	u := &bgp.Update{
+		Withdrawn: []netip.Prefix{pB},
+		NLRI:      []netip.Prefix{pA},
+		Attributes: attrs(
+			t,
+			bgp.OriginIGP,
+			bgp.ASPath{{ASNs: []uint32{64512}}},
+			bgp.MPReachNLRI{
+				Family:  v6u,
+				NextHop: netip.MustParseAddr("2001:db8::1"),
+				NLRI:    bgp.Prefixes{p6},
+			},
+		),
+	}
+
+	d := &bgp.UpdateDiagnostics{Malformed: &bgp.MessageError{
+		Code:    bgp.NotificationUpdateMessageError,
+		Subcode: bgp.SubcodeAttributeFlagsError,
+	}}
+
+	if err := tb.OnUpdate(ctx, p, u, d); err != nil {
+		t.Fatalf("failed to apply treat-as-withdraw UPDATE: %v", err)
+	}
+
+	if n := len(tb.Routes(p, v4u)); n != 0 {
+		t.Fatalf("expected no IPv4 unicast routes, but got %d", n)
+	}
+
+	if n := len(tb.Routes(p, v6u)); n != 0 {
+		t.Fatalf("expected no IPv6 unicast routes, but got %d", n)
 	}
 }
 
@@ -554,14 +645,24 @@ func TestTablePeersTCP(t *testing.T) {
 
 	tableA := newTable(t, testrib.Config{
 		Local: map[bgp.Family][]*bgp.Update{v4u: {{
-			NLRI:       []netip.Prefix{pA},
-			Attributes: attrs(t, bgp.OriginIGP, bgp.NextHop(netip.MustParseAddr("192.0.2.1"))),
+			NLRI: []netip.Prefix{pA},
+			Attributes: attrs(
+				t,
+				bgp.OriginIGP,
+				bgp.ASPath{{ASNs: []uint32{64512}}},
+				bgp.NextHop(netip.MustParseAddr("192.0.2.1")),
+			),
 		}}},
 	})
 	tableB := newTable(t, testrib.Config{
 		Local: map[bgp.Family][]*bgp.Update{v4u: {{
-			NLRI:       []netip.Prefix{pB},
-			Attributes: attrs(t, bgp.OriginIGP, bgp.NextHop(netip.MustParseAddr("192.0.2.2"))),
+			NLRI: []netip.Prefix{pB},
+			Attributes: attrs(
+				t,
+				bgp.OriginIGP,
+				bgp.ASPath{{ASNs: []uint32{64512}}},
+				bgp.NextHop(netip.MustParseAddr("192.0.2.2")),
+			),
 		}}},
 	})
 
@@ -744,8 +845,13 @@ func announce(t *testing.T, tb *testrib.Table, p *bgp.Peer, prefix string) {
 	t.Helper()
 
 	u := &bgp.Update{
-		NLRI:       []netip.Prefix{netip.MustParsePrefix(prefix)},
-		Attributes: attrs(t, bgp.OriginIGP, bgp.NextHop(netip.MustParseAddr("192.0.2.1"))),
+		NLRI: []netip.Prefix{netip.MustParsePrefix(prefix)},
+		Attributes: attrs(
+			t,
+			bgp.OriginIGP,
+			bgp.ASPath{{ASNs: []uint32{64512}}},
+			bgp.NextHop(netip.MustParseAddr("192.0.2.1")),
+		),
 	}
 
 	if err := tb.OnUpdate(context.Background(), p, u, nil); err != nil {

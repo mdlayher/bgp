@@ -327,13 +327,15 @@ func (t *Table) push(ctx context.Context, p *bgp.Peer, pending map[bgp.Family]bo
 }
 
 // OnUpdate implements PeerConfig.OnUpdate: End-of-RIB sweeps a family's stale
-// routes; any other UPDATE is applied to the peer's Adj-RIB-In. The Update
-// references the connection's read buffer, so everything retained is copied.
+// routes; any other UPDATE is applied to the peer's Adj-RIB-In. An UPDATE
+// RFC 7606 marks as a withdrawal withdraws what it announces instead. The
+// Update references the connection's read buffer, so everything retained is
+// copied.
 //
 // ctx is deliberately unused: the handler never blocks, which satisfies the
 // watch-ctx contract by returning promptly, and an UPDATE already received
 // is never wrong to apply.
-func (t *Table) OnUpdate(_ context.Context, p *bgp.Peer, u *bgp.Update, _ *bgp.UpdateDiagnostics) error {
+func (t *Table) OnUpdate(_ context.Context, p *bgp.Peer, u *bgp.Update, d *bgp.UpdateDiagnostics) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	ps := t.state(p)
@@ -348,6 +350,10 @@ func (t *Table) OnUpdate(_ context.Context, p *bgp.Peer, u *bgp.Update, _ *bgp.U
 		return nil
 	}
 
+	// RFC 7606 treat-as-withdraw: every prefix the UPDATE announces is
+	// withdrawn, and its attributes are read only to name them.
+	withdraw := d != nil && d.Malformed != nil
+
 	// Partition the attributes: MP containers carry this UPDATE's non-IPv4
 	// routes, while the full copied slice is what each route retains.
 	attrs := bgp.RawAttributes(u.Attributes).Clone()
@@ -355,8 +361,9 @@ func (t *Table) OnUpdate(_ context.Context, p *bgp.Peer, u *bgp.Update, _ *bgp.U
 	for _, ra := range attrs {
 		a, err := ra.Parse()
 		if err != nil {
-			// RFC 7606 is out of scope (see rfc-status): a malformed
-			// attribute is terminal for the session, exactly RFC 4271.
+			// Parse already classified every attribute type it
+			// interprets; what fails here is multiprotocol content, which
+			// RFC 7606, section 5.3 makes a session reset.
 			return err
 		}
 
@@ -375,13 +382,24 @@ func (t *Table) OnUpdate(_ context.Context, p *bgp.Peer, u *bgp.Update, _ *bgp.U
 		delete(ps.routes[v4u], pre)
 	}
 
+	// announce records pre in family f, or withdraws it when the UPDATE is
+	// treated as a withdrawal.
+	announce := func(f bgp.Family, pre netip.Prefix) {
+		if withdraw {
+			delete(ps.routes[f], pre)
+			return
+		}
+
+		ps.family(f)[pre] = &adjRoute{attrs: attrs}
+	}
+
 	for _, pre := range u.NLRI {
-		ps.family(v4u)[pre] = &adjRoute{attrs: attrs}
+		announce(v4u, pre)
 	}
 
 	for _, m := range reach {
 		for _, pre := range nlriPrefixes(m.NLRI) {
-			ps.family(m.Family)[pre] = &adjRoute{attrs: attrs}
+			announce(m.Family, pre)
 		}
 	}
 

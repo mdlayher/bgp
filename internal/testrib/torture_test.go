@@ -47,7 +47,11 @@ var (
 	// torAttrs is a shared valid attribute set for IPv4 announcements: the
 	// Table copies on insert, so sharing across workers is safe.
 	torAttrs = func() []bgp.RawAttribute {
-		ras, err := bgp.MarshalAttributes(bgp.OriginIGP, bgp.NextHop(netip.MustParseAddr("192.0.2.1")))
+		ras, err := bgp.MarshalAttributes(
+			bgp.OriginIGP,
+			bgp.ASPath{{ASNs: []uint32{64512}}},
+			bgp.NextHop(netip.MustParseAddr("192.0.2.1")),
+		)
 		if err != nil {
 			panic(err)
 		}
@@ -522,11 +526,15 @@ func tortureUpdate(rng *rand.Rand) (*bgp.Update, error) {
 			return u, nil
 		}
 
-		ras, err := bgp.MarshalAttributes(bgp.OriginIGP, bgp.MPReachNLRI{
-			Family:  v6u,
-			NextHop: netip.MustParseAddr("2001:db8::1"),
-			NLRI:    bgp.Prefixes(pick(torPoolV6)),
-		})
+		ras, err := bgp.MarshalAttributes(
+			bgp.OriginIGP,
+			bgp.ASPath{{ASNs: []uint32{64512}}},
+			bgp.MPReachNLRI{
+				Family:  v6u,
+				NextHop: netip.MustParseAddr("2001:db8::1"),
+				NLRI:    bgp.Prefixes(pick(torPoolV6)),
+			},
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -843,11 +851,15 @@ func tortureChurn(t *testing.T, p *bgp.Peer, seed uint64, ownV4, ownV6 []netip.P
 			return send(&bgp.Update{NLRI: []netip.Prefix{pre}, Attributes: torAttrs})
 		}
 
-		ras, err := bgp.MarshalAttributes(bgp.OriginIGP, bgp.MPReachNLRI{
-			Family:  v6u,
-			NextHop: netip.MustParseAddr("2001:db8::1"),
-			NLRI:    bgp.Prefixes{pre},
-		})
+		ras, err := bgp.MarshalAttributes(
+			bgp.OriginIGP,
+			bgp.ASPath{{ASNs: []uint32{64512}}},
+			bgp.MPReachNLRI{
+				Family:  v6u,
+				NextHop: netip.MustParseAddr("2001:db8::1"),
+				NLRI:    bgp.Prefixes{pre},
+			},
+		)
 		if err != nil {
 			t.Errorf("failed to build announcement: %v", err)
 			return false
