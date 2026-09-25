@@ -85,82 +85,58 @@ type RawAttribute struct {
 // with errors.Is, and the RawAttribute itself remains usable in raw form.
 func (a RawAttribute) Parse() (Attribute, error) {
 	attr, err := a.parse()
-	if merr, ok := errors.AsType[*MessageError](err); ok && merr.Data == nil {
-		// RFC 4271, section 6.3 requires that attribute errors echo the
-		// erroneous attribute itself: flags, type, length, and data. An
-		// attribute framed in a real message always fits; the echo is
-		// omitted only when a caller constructed an attribute so large that
-		// the resulting NOTIFICATION could not be marshaled.
-		data, aerr := appendRawAttribute(nil, a)
-		if aerr == nil && headerLen+2+len(data) <= MaxMessageSize {
-			merr.Data = data
-		}
+	if merr, ok := errors.AsType[*MessageError](err); ok {
+		return nil, a.echoData(merr)
 	}
 
 	return attr, err
 }
 
-// parse implements Parse, minus the diagnostic data handling.
+// echoData attaches a to merr as the diagnostic data RFC 4271, section 6.3
+// requires of an attribute error: flags, type, length, and value. An
+// attribute framed in a real message always fits; the echo is omitted only
+// when a caller constructed an attribute so large that the resulting
+// NOTIFICATION could not be marshaled. A merr which already carries data
+// keeps it.
+func (a RawAttribute) echoData(merr *MessageError) *MessageError {
+	if merr == nil || merr.Data != nil {
+		return merr
+	}
+
+	data, err := appendRawAttribute(nil, a)
+	if err == nil && headerLen+2+len(data) <= MaxMessageSize {
+		merr.Data = data
+	}
+
+	return merr
+}
+
+// parse implements Parse, minus the diagnostic data handling. What is
+// malformed is attrRule.validate's to say; what remains here is decoding.
 func (a RawAttribute) parse() (Attribute, error) {
+	if merr := attrRules[a.Type].validate(&a); merr != nil {
+		return nil, merr
+	}
+
 	switch a.Type {
 	case AttrOrigin:
-		if len(a.Data) != 1 {
-			return nil, updateError(SubcodeAttributeLengthError, nil,
-				"invalid ORIGIN attribute length %d", len(a.Data))
-		}
-
-		if a.Data[0] > uint8(OriginIncomplete) {
-			return nil, updateError(SubcodeInvalidOriginAttribute, nil,
-				"invalid ORIGIN value %d", a.Data[0])
-		}
-
 		return Origin(a.Data[0]), nil
 	case AttrASPath:
 		return parseASPath(a.Data)
 	case AttrNextHop:
-		if len(a.Data) != 4 {
-			return nil, updateError(SubcodeAttributeLengthError, nil,
-				"invalid NEXT_HOP attribute length %d", len(a.Data))
-		}
-
 		return NextHop(netip.AddrFrom4([4]byte(a.Data))), nil
 	case AttrMED:
-		if len(a.Data) != 4 {
-			return nil, updateError(SubcodeAttributeLengthError, nil,
-				"invalid MULTI_EXIT_DISC attribute length %d", len(a.Data))
-		}
-
 		return MED(binary.BigEndian.Uint32(a.Data)), nil
 	case AttrLocalPref:
-		if len(a.Data) != 4 {
-			return nil, updateError(SubcodeAttributeLengthError, nil,
-				"invalid LOCAL_PREF attribute length %d", len(a.Data))
-		}
-
 		return LocalPref(binary.BigEndian.Uint32(a.Data)), nil
 	case AttrAtomicAggregate:
-		if len(a.Data) != 0 {
-			return nil, updateError(SubcodeAttributeLengthError, nil,
-				"invalid ATOMIC_AGGREGATE attribute length %d", len(a.Data))
-		}
-
 		return AtomicAggregate{}, nil
 	case AttrAggregator:
-		if len(a.Data) != 8 {
-			return nil, updateError(SubcodeAttributeLengthError, nil,
-				"invalid AGGREGATOR attribute length %d", len(a.Data))
-		}
-
 		return Aggregator{
 			ASN: binary.BigEndian.Uint32(a.Data[0:4]),
 			ID:  Identifier(binary.BigEndian.Uint32(a.Data[4:8])),
 		}, nil
 	case AttrCommunities:
-		if len(a.Data)%4 != 0 {
-			return nil, updateError(SubcodeAttributeLengthError, nil,
-				"invalid COMMUNITIES attribute length %d", len(a.Data))
-		}
-
 		cs := make(Communities, 0, len(a.Data)/4)
 		for i := 0; i < len(a.Data); i += 4 {
 			cs = append(cs, Community(binary.BigEndian.Uint32(a.Data[i:])))
@@ -168,18 +144,8 @@ func (a RawAttribute) parse() (Attribute, error) {
 
 		return cs, nil
 	case AttrOriginatorID:
-		if len(a.Data) != 4 {
-			return nil, updateError(SubcodeAttributeLengthError, nil,
-				"invalid ORIGINATOR_ID attribute length %d", len(a.Data))
-		}
-
 		return OriginatorID(binary.BigEndian.Uint32(a.Data)), nil
 	case AttrClusterList:
-		if len(a.Data)%4 != 0 {
-			return nil, updateError(SubcodeAttributeLengthError, nil,
-				"invalid CLUSTER_LIST attribute length %d", len(a.Data))
-		}
-
 		cl := make(ClusterList, 0, len(a.Data)/4)
 		for i := 0; i < len(a.Data); i += 4 {
 			cl = append(cl, Identifier(binary.BigEndian.Uint32(a.Data[i:])))
@@ -187,11 +153,6 @@ func (a RawAttribute) parse() (Attribute, error) {
 
 		return cl, nil
 	case AttrExtendedCommunities:
-		if len(a.Data)%8 != 0 {
-			return nil, updateError(SubcodeAttributeLengthError, nil,
-				"invalid EXTENDED_COMMUNITIES attribute length %d", len(a.Data))
-		}
-
 		ecs := make(ExtendedCommunities, 0, len(a.Data)/8)
 		for i := 0; i < len(a.Data); i += 8 {
 			ecs = append(ecs, ExtendedCommunity([8]byte(a.Data[i:i+8])))
@@ -213,11 +174,6 @@ func (a RawAttribute) parse() (Attribute, error) {
 
 		return m, nil
 	case AttrLargeCommunities:
-		if len(a.Data)%12 != 0 {
-			return nil, updateError(SubcodeAttributeLengthError, nil,
-				"invalid LARGE_COMMUNITY attribute length %d", len(a.Data))
-		}
-
 		ls := make(LargeCommunities, 0, len(a.Data)/12)
 		for i := 0; i < len(a.Data); i += 12 {
 			ls = append(ls, LargeCommunity{
@@ -229,11 +185,6 @@ func (a RawAttribute) parse() (Attribute, error) {
 
 		return ls, nil
 	case AttrOTC:
-		if len(a.Data) != 4 {
-			return nil, updateError(SubcodeAttributeLengthError, nil,
-				"invalid OTC attribute length %d", len(a.Data))
-		}
-
 		return OTC(binary.BigEndian.Uint32(a.Data)), nil
 	default:
 		return nil, fmt.Errorf("%w %d", ErrUnknownAttribute, uint8(a.Type))
@@ -692,41 +643,28 @@ func (p ASPath) appendData(b []byte) ([]byte, error) {
 	return b, nil
 }
 
-// parseASPath parses the data of an AS_PATH attribute.
+// parseASPath parses the data of an AS_PATH attribute. validateASPath
+// frames the segments first, so the decode loop reads only whole ones.
 func parseASPath(b []byte) (ASPath, error) {
+	if merr := validateASPath(b); merr != nil {
+		return nil, merr
+	}
+
 	var p ASPath
 	for len(b) > 0 {
-		if len(b) < 2 {
-			return nil, updateError(SubcodeMalformedASPath, nil,
-				"AS_PATH segment truncated")
-		}
-
 		typ, n := b[0], int(b[1])
 
 		var set, confed bool
 		switch typ {
 		case asSet:
 			set = true
-		case asSequence:
 		case asConfedSequence:
 			confed = true
 		case asConfedSet:
 			set, confed = true, true
-		default:
-			return nil, updateError(SubcodeMalformedASPath, nil,
-				"unsupported AS_PATH segment type %d", typ)
-		}
-
-		if n == 0 {
-			return nil, updateError(SubcodeMalformedASPath, nil,
-				"empty AS_PATH segment")
 		}
 
 		b = b[2:]
-		if len(b) < 4*n {
-			return nil, updateError(SubcodeMalformedASPath, nil,
-				"AS_PATH segment truncated")
-		}
 
 		asns := make([]uint32, 0, n)
 		for i := range n {

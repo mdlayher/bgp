@@ -642,6 +642,18 @@ func TestRawAttributeParseErrors(t *testing.T) {
 			subcode: SubcodeAttributeLengthError,
 		},
 		{
+			// RFC 7606, section 4: a repeated element attribute with no
+			// elements is a syntax error, not an empty list.
+			name:    "communities empty",
+			a:       RawAttribute{Type: AttrCommunities, Data: []byte{}},
+			subcode: SubcodeAttributeLengthError,
+		},
+		{
+			name:    "large communities empty",
+			a:       RawAttribute{Type: AttrLargeCommunities, Data: []byte{}},
+			subcode: SubcodeAttributeLengthError,
+		},
+		{
 			name:    "originator ID length",
 			a:       RawAttribute{Type: AttrOriginatorID, Data: []byte{192, 0, 2}},
 			subcode: SubcodeAttributeLengthError,
