@@ -370,12 +370,13 @@ func (s typeSet) otherThan(t AttrType) bool {
 	return s[0]|s[1]|s[2]|s[3] != 0
 }
 
-// classify applies RFC 7606 error handling to a parsed UPDATE. A non-nil
-// error is a session reset, which parseUpdate returns so the FSM answers
-// the peer. Otherwise the UPDATE is delivered with diagnostics: Malformed
-// for a treat-as-withdraw, Discarded for every attribute removed from
-// Attributes. The diagnostics are nil when there is nothing to report.
-func (u *Update) classify() (*UpdateDiagnostics, error) {
+// classify applies RFC 7606 error handling to a parsed UPDATE. framing is
+// the attribute list truncation parseRawAttributes reported, or nil. A
+// non-nil error is a session reset, which parseUpdate returns so the FSM
+// answers the peer. Otherwise the UPDATE is delivered with diagnostics:
+// Malformed for a treat-as-withdraw, Discarded for every attribute removed
+// from Attributes. The diagnostics are nil when there is nothing to report.
+func (u *Update) classify(framing *MessageError) (*UpdateDiagnostics, error) {
 	var (
 		seen      typeSet
 		worst     outcome
@@ -433,6 +434,15 @@ func (u *Update) classify() (*UpdateDiagnostics, error) {
 		u.Attributes = u.Attributes[:kept]
 	}
 
+	// RFC 7606, section 4: the attribute list did not frame, but the Total
+	// Attribute Length still located the NLRI, so this is a
+	// treat-as-withdraw rather than RFC 4271's reset. The truncation is at
+	// the end of the list, so any attribute error precedes it in wire
+	// order.
+	if framing != nil && worst < outcomeWithdraw {
+		worst, first = outcomeWithdraw, framing
+	}
+
 	// RFC 4271, section 4.3: an UPDATE which advertises routes carries the
 	// well-known mandatory attributes, and RFC 7606, section 3(d) makes
 	// their absence a treat-as-withdraw. RFC 4760, section 3 makes
@@ -462,8 +472,10 @@ func (u *Update) classify() (*UpdateDiagnostics, error) {
 	if worst == outcomeWithdraw {
 		// RFC 7606, section 5.2: an UPDATE with path attributes other than
 		// MP_UNREACH_NLRI but nothing reachable cannot be trusted to have
-		// had its NLRI located, so section 3(j)'s session reset applies.
-		if !announces && seen.otherThan(AttrMPUnreachNLRI) {
+		// had its NLRI located, so section 3(j)'s session reset applies. A
+		// list which did not frame counts as carrying such an attribute:
+		// its unread tail is unknown.
+		if !announces && (framing != nil || seen.otherThan(AttrMPUnreachNLRI)) {
 			return nil, first
 		}
 	} else {

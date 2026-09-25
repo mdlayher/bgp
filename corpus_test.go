@@ -67,9 +67,9 @@ func TestCorpusRIB(t *testing.T) {
 
 			routes++
 
-			as, err := parseRawAttributes(e.Attrs)
-			if err != nil {
-				t.Fatalf("%s: failed to frame attributes for %s: %v", name, e.Prefix, err)
+			as, merr := parseRawAttributes(e.Attrs)
+			if merr != nil {
+				t.Fatalf("%s: failed to frame attributes for %s: %v", name, e.Prefix, merr)
 			}
 
 			for _, a := range as {
@@ -313,9 +313,9 @@ func ribSeeds(tb testing.TB) []RawAttribute {
 				tb.Fatalf("failed to read RIB entry: %v", err)
 			}
 
-			as, err := parseRawAttributes(e.Attrs)
-			if err != nil {
-				tb.Fatalf("failed to frame RIB attributes: %v", err)
+			as, merr := parseRawAttributes(e.Attrs)
+			if merr != nil {
+				tb.Fatalf("failed to frame RIB attributes: %v", merr)
 			}
 
 			for _, a := range as {
@@ -389,9 +389,9 @@ func tableReplay(tb testing.TB) ([]byte, int) {
 
 			seen[e.Prefix] = struct{}{}
 
-			as, err := parseRawAttributes(e.Attrs)
-			if err != nil {
-				tb.Fatalf("failed to frame attributes for %s: %v", e.Prefix, err)
+			as, merr := parseRawAttributes(e.Attrs)
+			if merr != nil {
+				tb.Fatalf("failed to frame attributes for %s: %v", e.Prefix, merr)
 			}
 
 			start := len(wire)

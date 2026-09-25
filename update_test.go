@@ -406,6 +406,17 @@ func TestParseUpdateMalformed(t *testing.T) {
 			kept:    3,
 		},
 		{
+			// RFC 7606, section 4: the last attribute does not frame, but
+			// the Total Attribute Length still located the NLRI, so the
+			// UPDATE is delivered rather than resetting the session. The
+			// attributes read before the truncation stand.
+			name:    "attribute list truncated",
+			attrs:   concat(originAttr(), asPathAttr(), nextHopAttr(), []byte{0x40, 0x05}),
+			nlri:    v4NLRI(),
+			subcode: SubcodeMalformedAttributeList,
+			kept:    3,
+		},
+		{
 			// RFC 7606, section 3(d).
 			name:    "ORIGIN missing beside legacy NLRI",
 			attrs:   concat(asPathAttr(), nextHopAttr()),

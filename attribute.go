@@ -362,7 +362,12 @@ func appendRawAttribute(b []byte, a RawAttribute) ([]byte, error) {
 // parseRawAttributes parses raw path attributes from b, until b is
 // exhausted. The parsed attributes reference b rather than copying it; see
 // ParseMessage.
-func parseRawAttributes(b []byte) (RawAttributes, error) {
+//
+// A truncated list returns the attributes read before the truncation
+// alongside the error, so that RFC 7606, section 4 can classify the UPDATE
+// with them: the Total Attribute Length still locates the NLRI. A caller
+// which does not classify treats the error as fatal.
+func parseRawAttributes(b []byte) (RawAttributes, *MessageError) {
 	// One counting pass sizes the slice exactly, so an attribute list
 	// costs a single allocation instead of append's doubling. Truncation
 	// is left to the parse loop below, which reports it precisely.
@@ -392,8 +397,7 @@ func parseRawAttributes(b []byte) (RawAttributes, error) {
 
 	for len(b) > 0 {
 		if len(b) < 3 {
-			return nil, updateError(SubcodeMalformedAttributeList, nil,
-				"path attribute truncated")
+			return attrs, truncatedAttribute()
 		}
 
 		flags, typ := AttrFlags(b[0]), AttrType(b[1])
@@ -401,8 +405,7 @@ func parseRawAttributes(b []byte) (RawAttributes, error) {
 		var n int
 		if flags&attrFlagExtendedLength != 0 {
 			if len(b) < 4 {
-				return nil, updateError(SubcodeMalformedAttributeList, nil,
-					"path attribute truncated")
+				return attrs, truncatedAttribute()
 			}
 
 			n = int(binary.BigEndian.Uint16(b[2:4]))
@@ -413,8 +416,7 @@ func parseRawAttributes(b []byte) (RawAttributes, error) {
 		}
 
 		if len(b) < n {
-			return nil, updateError(SubcodeMalformedAttributeList, nil,
-				"path attribute truncated")
+			return attrs, truncatedAttribute()
 		}
 
 		attrs = append(attrs, RawAttribute{
@@ -426,6 +428,12 @@ func parseRawAttributes(b []byte) (RawAttributes, error) {
 	}
 
 	return attrs, nil
+}
+
+// truncatedAttribute is the error for an attribute list which does not
+// frame, either condition of RFC 7606, section 4.
+func truncatedAttribute() *MessageError {
+	return updateError(SubcodeMalformedAttributeList, nil, "path attribute truncated")
 }
 
 // An Attribute is a BGP path attribute in parsed form. Attribute is

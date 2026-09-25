@@ -933,9 +933,9 @@ func TestParseRawAttributesExtendedLengthNormalized(t *testing.T) {
 		t.Fatalf("unexpected attributes (-want +got):\n%s", d)
 	}
 
-	b, err := appendRawAttribute(nil, attrs[0])
-	if err != nil {
-		t.Fatalf("failed to marshal attribute: %v", err)
+	b, aerr := appendRawAttribute(nil, attrs[0])
+	if aerr != nil {
+		t.Fatalf("failed to marshal attribute: %v", aerr)
 	}
 
 	wantB := []byte{byte(AttrFlagTransitive), byte(AttrOrigin), 0x01, 0x00}
@@ -963,9 +963,9 @@ func TestRawAttributeExtendedLengthRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected extended length encoding size: %d", n)
 	}
 
-	attrs, err := parseRawAttributes(b)
-	if err != nil {
-		t.Fatalf("failed to parse attributes: %v", err)
+	attrs, merr := parseRawAttributes(b)
+	if merr != nil {
+		t.Fatalf("failed to parse attributes: %v", merr)
 	}
 
 	if d := diff(t, []RawAttribute{a}, attrs); d != "" {

@@ -239,11 +239,11 @@ func parseUpdate(b []byte, addPath []Family) (*Update, *UpdateDiagnostics, error
 			"UPDATE path attributes truncated")
 	}
 
-	u.Attributes, err = parseRawAttributes(b[2 : 2+aLen])
-	if err != nil {
-		return nil, nil, err
-	}
-
+	// A truncated attribute list is classified rather than fatal: the
+	// attributes read before it stand, and the Total Attribute Length
+	// still locates the NLRI (RFC 7606, section 4).
+	var framing *MessageError
+	u.Attributes, framing = parseRawAttributes(b[2 : 2+aLen])
 	u.Attributes.markAddPath(addPath)
 
 	if nlri := b[2+aLen:]; len(nlri) > 0 {
@@ -255,7 +255,7 @@ func parseUpdate(b []byte, addPath []Family) (*Update, *UpdateDiagnostics, error
 
 	// The NLRI fields are parsed first: RFC 7606 classifies an attribute
 	// error by whether the routes it affects can be named at all.
-	diag, err := u.classify()
+	diag, err := u.classify(framing)
 	if err != nil {
 		return nil, nil, err
 	}
