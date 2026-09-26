@@ -17,7 +17,8 @@ belongs in a package of its own, such as bgp/evpn or bgp/bgpls.
 | 4760 | Multiprotocol extensions | MP_REACH_NLRI and MP_UNREACH_NLRI. NLRI is typed by family: Prefixes, EVPNRoutes, or RawNLRI for an unmodeled family, which round-trips byte for byte |
 | 6793 | Four-octet ASNs | Native. A speaker without the capability is rejected |
 | 5492 | Capabilities | OPEN optional parameter type 2 |
-| 1997 | Communities | Typed |
+| 1997 | Communities | Typed. NO_EXPORT, NO_ADVERTISE, and NO_EXPORT_SUBCONFED are named; honoring them is the caller's |
+| 3765 / 7999 / 8326 | NOPEER, BLACKHOLE, GRACEFUL_SHUTDOWN communities | Named. Honoring them is the caller's |
 | 8092 | Large communities | Typed |
 | 4360 / 5668 | Extended communities | Opaque 8 byte values with RT and SoO constructors |
 | 8097 | Origin validation state | ValidationState extended community. ASPath.Origin gives the RFC 6811 origin AS; validation is the caller's |

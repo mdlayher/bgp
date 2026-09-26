@@ -1308,6 +1308,12 @@ func TestAttributeStrings(t *testing.T) {
 		{name: "community", s: NewCommunity(64496, 100).String(), want: "64496:100"},
 		{name: "community LLGR_STALE", s: CommunityLLGRStale.String(), want: "LLGR_STALE"},
 		{name: "community NO_LLGR", s: CommunityNoLLGR.String(), want: "NO_LLGR"},
+		{name: "community GRACEFUL_SHUTDOWN", s: CommunityGracefulShutdown.String(), want: "GRACEFUL_SHUTDOWN"},
+		{name: "community BLACKHOLE", s: NewCommunity(65535, 666).String(), want: "BLACKHOLE"},
+		{name: "community NO_EXPORT", s: NewCommunity(65535, 65281).String(), want: "NO_EXPORT"},
+		{name: "community NO_ADVERTISE", s: CommunityNoAdvertise.String(), want: "NO_ADVERTISE"},
+		{name: "community NO_EXPORT_SUBCONFED", s: CommunityNoExportSubconfed.String(), want: "NO_EXPORT_SUBCONFED"},
+		{name: "community NOPEER", s: CommunityNoPeer.String(), want: "NOPEER"},
 		{name: "community reserved unnamed", s: NewCommunity(65535, 8).String(), want: "65535:8"},
 		{
 			name: "large community",

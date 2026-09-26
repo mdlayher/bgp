@@ -7,17 +7,44 @@ import (
 	"net/netip"
 )
 
-// Well-known communities of the long-lived graceful restart extension (RFC
-// 9494, section 6), in the reserved 65535 range. Attaching, honoring, and
-// depreferencing by them is the caller's RIB's; this package names them.
+// Well-known communities in the reserved 65535 range, from the IANA
+// registry. Attaching and honoring them is the caller's policy and RIB's;
+// this package names them.
 const (
+	// CommunityGracefulShutdown is GRACEFUL_SHUTDOWN (65535:0): the route
+	// is about to be withdrawn for planned maintenance, and receivers
+	// should depreference it (RFC 8326).
+	CommunityGracefulShutdown Community = 0xffff0000
+
 	// CommunityLLGRStale is LLGR_STALE (65535:6): the route was retained
-	// as long-lived stale by the speaker that attached it.
+	// as long-lived stale by the speaker that attached it (RFC 9494).
 	CommunityLLGRStale Community = 0xffff0006
 
 	// CommunityNoLLGR is NO_LLGR (65535:7): the route must not be retained
-	// by long-lived graceful restart.
+	// by long-lived graceful restart (RFC 9494).
 	CommunityNoLLGR Community = 0xffff0007
+
+	// CommunityBlackhole is BLACKHOLE (65535:666): the receiver is asked
+	// to discard traffic to the route's destination (RFC 7999).
+	CommunityBlackhole Community = 0xffff029a
+
+	// CommunityNoExport is NO_EXPORT (65535:65281): the route must not be
+	// advertised outside the confederation, or the AS if there is none
+	// (RFC 1997).
+	CommunityNoExport Community = 0xffffff01
+
+	// CommunityNoAdvertise is NO_ADVERTISE (65535:65282): the route must
+	// not be advertised to any peer (RFC 1997).
+	CommunityNoAdvertise Community = 0xffffff02
+
+	// CommunityNoExportSubconfed is NO_EXPORT_SUBCONFED (65535:65283): the
+	// route must not be advertised to external peers, including peers in
+	// other member ASes of a confederation (RFC 1997).
+	CommunityNoExportSubconfed Community = 0xffffff03
+
+	// CommunityNoPeer is NOPEER (65535:65284): the route need not be
+	// advertised to bilateral peers (RFC 3765).
+	CommunityNoPeer Community = 0xffffff04
 )
 
 // A Community is a BGP community value, as described in RFC 1997,
@@ -33,10 +60,22 @@ func NewCommunity(asn, value uint16) Community {
 // RFC name of a well-known value this package models, such as LLGR_STALE.
 func (c Community) String() string {
 	switch c {
+	case CommunityGracefulShutdown:
+		return "GRACEFUL_SHUTDOWN"
 	case CommunityLLGRStale:
 		return "LLGR_STALE"
 	case CommunityNoLLGR:
 		return "NO_LLGR"
+	case CommunityBlackhole:
+		return "BLACKHOLE"
+	case CommunityNoExport:
+		return "NO_EXPORT"
+	case CommunityNoAdvertise:
+		return "NO_ADVERTISE"
+	case CommunityNoExportSubconfed:
+		return "NO_EXPORT_SUBCONFED"
+	case CommunityNoPeer:
+		return "NOPEER"
 	default:
 		return fmt.Sprintf("%d:%d", uint32(c)>>16, uint32(c)&0xffff)
 	}
