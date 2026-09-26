@@ -254,15 +254,16 @@ func validateMPReach(b []byte, addPath bool) *MessageError {
 
 // validateNextHop checks an MP_REACH_NLRI next hop of family f. A family
 // whose next hop this package models must carry one of that family's
-// lengths; a family it does not model may carry any length. Zero is an
-// absent next hop for any family.
+// lengths: an IP address, with a link-local beside it for IPv6, or one
+// behind a route distinguisher for a VPN family. A family it does not model
+// may carry any length. Zero is an absent next hop for any family.
 func validateNextHop(f Family, nh []byte) *MessageError {
 	switch n := len(nh); {
 	case n == 0:
 		return nil
 	case f.rdNextHop():
 		return validateRDNextHop(f, nh)
-	case f.prefixShaped() && n != 4 && n != 16 && n != 32:
+	case (f.prefixShaped() || f.linkState()) && n != 4 && n != 16 && n != 32:
 		return unsupportedNextHop(f, n)
 	default:
 		return nil
@@ -316,9 +317,32 @@ func validateNLRI(b []byte, f Family, addPath bool) *MessageError {
 		return validatePrefixes(b, max, addPath)
 	case f == familyEVPN:
 		return validateEVPNRoutes(b)
+	case f.linkState():
+		return validateLinkStateRoutes(b)
 	default:
 		return nil
 	}
+}
+
+// validateLinkStateRoutes checks that b frames as BGP-LS NLRI records: a
+// two byte type, a two byte length, and that many bytes.
+func validateLinkStateRoutes(b []byte) *MessageError {
+	for len(b) > 0 {
+		if len(b) < 4 {
+			return updateError(SubcodeOptionalAttributeError, nil,
+				"BGP-LS NLRI header truncated")
+		}
+
+		n := int(binary.BigEndian.Uint16(b[2:4]))
+		if len(b[4:]) < n {
+			return updateError(SubcodeOptionalAttributeError, nil,
+				"BGP-LS NLRI truncated: %d of %d bytes", len(b[4:]), n)
+		}
+
+		b = b[4+n:]
+	}
+
+	return nil
 }
 
 // validatePrefixes checks that b frames as prefixes of at most max bits,

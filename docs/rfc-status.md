@@ -5,6 +5,10 @@ and what it does not do. The package is the BGP wire format, the FSM, and
 the Peer and Server which drive it. Routing state and policy are the
 caller's.
 
+An address family's NLRI is decoded only as far as the wire format goes:
+prefixes, or records of a type and an opaque value. What a record means
+belongs in a package of its own, such as bgp/evpn or bgp/bgpls.
+
 ## Supported
 
 | RFC | Subject | What is implemented |
@@ -25,6 +29,7 @@ caller's.
 | 8950 | IPv4 NLRI with IPv6 next hop | Both directions; ExtendedNextHopCapability |
 | 2545 / 4659 | IPv6 link-local next hop | 32 byte dual next hop. VPN families' RD-prefixed next hops carry zero RDs, stripped on parse and restored on marshal |
 | 7432 / 9136 | EVPN | Family constants and EVPNRoutes: route type, length, opaque value. Record internals are the caller's |
+| 9552 | BGP-LS | Family constants for SAFI 71 and 72 and LinkStateRoutes: NLRI type, length, opaque value. The descriptor and attribute TLVs are the caller's; the BGP-LS attribute (type 29) is carried as a RawAttribute |
 | 6286 | AS-wide BGP identifiers | Collision tiebreak in the FSM; an internal peer with the local identifier is rejected with Bad BGP Identifier |
 | 7607 | AS 0 | NewPeer rejects a zero local ASN; a peer OPEN with ASN 0 draws Bad Peer AS |
 | 2385 | TCP-MD5 | PeerConfig.MD5Password and Listener.SetMD5, Linux only, not on a DialFunc transport. Zoned IPv6 link-local peers work |

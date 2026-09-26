@@ -316,6 +316,43 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 			},
 		},
 		{
+			// One RFC 9552, section 5.2.1 Node NLRI from IS-IS level 2: a
+			// Protocol-ID, an Identifier, and a Local Node Descriptors TLV
+			// holding an Autonomous System and an IGP Router-ID. The value
+			// is opaque to this package; it is spelled out so the framing
+			// around it is pinned to real BGP-LS bytes rather than filler.
+			name: "MP reach BGP-LS",
+			attr: MPReachNLRI{
+				Family:  Family{AFI: AFILinkState, SAFI: SAFILinkState},
+				NextHop: netip.MustParseAddr("192.0.2.1"),
+				NLRI: LinkStateRoutes{{
+					Type: LinkStateRouteNode,
+					Value: []byte{
+						0x02,
+						0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+						0x01, 0x00, 0x00, 0x12,
+						0x02, 0x00, 0x00, 0x04, 0x00, 0x00, 0xfc, 0x00,
+						0x02, 0x03, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+					},
+				}},
+			},
+			raw: RawAttribute{
+				Flags: AttrFlagOptional,
+				Type:  AttrMPReachNLRI,
+				Data: []byte{
+					0x40, 0x04, 0x47,
+					4, 192, 0, 2, 1,
+					0x00,
+					0x00, 0x01, 0x00, 0x1f,
+					0x02,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0x01, 0x00, 0x00, 0x12,
+					0x02, 0x00, 0x00, 0x04, 0x00, 0x00, 0xfc, 0x00,
+					0x02, 0x03, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+				},
+			},
+		},
+		{
 			// A VPN-IPv4 route (RFC 4364): the next hop rides behind a zero
 			// route distinguisher this package strips and restores, and the
 			// label-and-RD-prefixed NLRI is unmodeled, carried verbatim.
@@ -785,6 +822,15 @@ func TestRawAttributeParseErrors(t *testing.T) {
 			subcode: SubcodeOptionalAttributeError,
 		},
 		{
+			// A BGP-LS record whose length overruns the attribute.
+			name: "MP reach BGP-LS record truncated",
+			a: RawAttribute{
+				Type: AttrMPReachNLRI,
+				Data: []byte{0x40, 0x04, 0x47, 4, 192, 0, 2, 1, 0x00, 0, 1, 0, 8, 0xde, 0xad},
+			},
+			subcode: SubcodeOptionalAttributeError,
+		},
+		{
 			// An EVPN record whose length overruns the attribute: the
 			// framing this package does own, failing at the attribute layer
 			// so the erroneous attribute is echoed per RFC 4271, 6.3.
@@ -1022,6 +1068,25 @@ func TestMarshalAttributesErrors(t *testing.T) {
 			attr: MPUnreachNLRI{
 				Family: Family{AFI: AFIL2VPN, SAFI: SAFIEVPN},
 				NLRI:   Prefixes{netip.MustParsePrefix("192.0.2.0/24")},
+			},
+		},
+		{
+			name: "MP reach BGP-LS routes in a prefix family",
+			attr: MPReachNLRI{
+				Family:  Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				NextHop: netip.MustParseAddr("2001:db8::1"),
+				NLRI:    LinkStateRoutes{{Type: LinkStateRouteNode}},
+			},
+		},
+		{
+			name: "MP reach BGP-LS route value too long",
+			attr: MPReachNLRI{
+				Family:  Family{AFI: AFILinkState, SAFI: SAFILinkState},
+				NextHop: netip.MustParseAddr("192.0.2.1"),
+				NLRI: LinkStateRoutes{{
+					Type:  LinkStateRouteNode,
+					Value: make([]byte, 65536),
+				}},
 			},
 		},
 		{

@@ -2,6 +2,7 @@ package bgp
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"net/netip"
@@ -9,15 +10,17 @@ import (
 
 // An NLRI is the Network Layer Reachability Information of one address family:
 // the payload of an MPReachNLRI or MPUnreachNLRI attribute, whose shape the
-// family determines. NLRI is implemented by Prefixes, EVPNRoutes, and RawNLRI.
+// family determines. NLRI is implemented by Prefixes, PathPrefixes,
+// EVPNRoutes, LinkStateRoutes, and RawNLRI.
 //
 // A nil NLRI carries no reachability information: it is what an End-of-RIB
 // marker's MPUnreachNLRI holds, and what parse produces for any family whose
 // NLRI is empty.
 //
 // Reachability information is not universally prefix shaped: the families of
-// RFC 4271 and RFC 4760 carry prefixes, EVPN carries typed records (RFC 7432),
-// and others carry route distinguishers, labels, or flow specifications. A
+// RFC 4271 and RFC 4760 carry prefixes, EVPN and BGP-LS carry typed records
+// (RFC 7432, RFC 9552), and others carry route distinguishers, labels, or
+// flow specifications. A
 // family this package does not model decodes to RawNLRI rather than to an
 // error, so it survives parse and re-marshal byte for byte, as an unknown
 // attribute type does.
@@ -32,6 +35,7 @@ var (
 	_ NLRI = Prefixes(nil)
 	_ NLRI = PathPrefixes(nil)
 	_ NLRI = EVPNRoutes(nil)
+	_ NLRI = LinkStateRoutes(nil)
 	_ NLRI = RawNLRI(nil)
 )
 
@@ -179,6 +183,106 @@ func parseEVPNRoutes(b []byte) (EVPNRoutes, error) {
 	return rs, nil
 }
 
+// A LinkStateRouteType is the NLRI type of one BGP-LS route, as assigned by
+// IANA.
+type LinkStateRouteType uint16
+
+// LinkStateRouteType values for the NLRI types of RFC 9552, section 5.2,
+// RFC 9168, and RFC 9514.
+const (
+	LinkStateRouteNode               LinkStateRouteType = 1
+	LinkStateRouteLink               LinkStateRouteType = 2
+	LinkStateRouteIPv4TopologyPrefix LinkStateRouteType = 3
+	LinkStateRouteIPv6TopologyPrefix LinkStateRouteType = 4
+	LinkStateRouteTEPolicy           LinkStateRouteType = 5
+	LinkStateRouteSRv6SID            LinkStateRouteType = 6
+)
+
+// String returns the name of a LinkStateRouteType.
+func (t LinkStateRouteType) String() string {
+	switch t {
+	case LinkStateRouteNode:
+		return "Node"
+	case LinkStateRouteLink:
+		return "Link"
+	case LinkStateRouteIPv4TopologyPrefix:
+		return "IPv4 Topology Prefix"
+	case LinkStateRouteIPv6TopologyPrefix:
+		return "IPv6 Topology Prefix"
+	case LinkStateRouteTEPolicy:
+		return "TE Policy"
+	case LinkStateRouteSRv6SID:
+		return "SRv6 SID"
+	default:
+		return fmt.Sprintf("BGP-LS NLRI type %d", uint16(t))
+	}
+}
+
+// A LinkStateRoute is one BGP-LS NLRI, as described in RFC 9552, section
+// 5.1: an NLRI type and the value it frames.
+//
+// Value is opaque. Its interpretation (the Protocol-ID, the Identifier, the
+// node, link, and prefix descriptor TLVs, and for the VPN SAFI the route
+// distinguisher which precedes them) is the vocabulary of a topology model,
+// which is the caller's side of this package's boundary. What this package
+// owns is the framing: a type, a two byte length, and a value of exactly
+// that length.
+type LinkStateRoute struct {
+	Type  LinkStateRouteType
+	Value []byte
+}
+
+// LinkStateRoutes is the NLRI of the BGP-LS families (AFI 16388, SAFI 71
+// and 72), a list of typed records rather than of prefixes, as described in
+// RFC 9552, section 5.1.
+type LinkStateRoutes []LinkStateRoute
+
+func (rs LinkStateRoutes) appendNLRI(b []byte, f Family) ([]byte, error) {
+	if !f.linkState() {
+		return nil, fmt.Errorf("bgp: BGP-LS NLRI cannot belong to family %s", f)
+	}
+
+	for _, r := range rs {
+		if len(r.Value) > math.MaxUint16 {
+			return nil, fmt.Errorf("bgp: %s BGP-LS route value of %d bytes exceeds the maximum of %d",
+				r.Type, len(r.Value), math.MaxUint16)
+		}
+
+		b = binary.BigEndian.AppendUint16(b, uint16(r.Type))
+		b = binary.BigEndian.AppendUint16(b, uint16(len(r.Value)))
+		b = append(b, r.Value...)
+	}
+
+	return b, nil
+}
+
+// parseLinkStateRoutes parses BGP-LS NLRI records from b until b is
+// exhausted.
+func parseLinkStateRoutes(b []byte) (LinkStateRoutes, error) {
+	var rs LinkStateRoutes
+	for len(b) > 0 {
+		if len(b) < 4 {
+			return nil, updateError(SubcodeOptionalAttributeError, nil,
+				"BGP-LS NLRI header truncated")
+		}
+
+		n := int(binary.BigEndian.Uint16(b[2:4]))
+		if len(b[4:]) < n {
+			return nil, updateError(SubcodeOptionalAttributeError, nil,
+				"BGP-LS NLRI truncated: %d of %d bytes", len(b[4:]), n)
+		}
+
+		rs = append(rs, LinkStateRoute{
+			Type: LinkStateRouteType(binary.BigEndian.Uint16(b[0:2])),
+			// Cloned for the reason parseEVPNRoutes clones.
+			Value: bytes.Clone(b[4 : 4+n]),
+		})
+		b = b[4+n:]
+	}
+
+	return rs, nil
+}
+
 // A RawNLRI is reachability information in raw binary form: the shape of an
 // address family this package does not model, and the escape hatch for
 // sending one. It is the NLRI counterpart of an unparsed RawAttribute.
@@ -225,6 +329,13 @@ func parseNLRI(b []byte, f Family, addPath bool) (NLRI, error) {
 		return Prefixes(ps), nil
 	case f == familyEVPN:
 		rs, err := parseEVPNRoutes(b)
+		if err != nil {
+			return nil, err
+		}
+
+		return rs, nil
+	case f.linkState():
+		rs, err := parseLinkStateRoutes(b)
 		if err != nil {
 			return nil, err
 		}

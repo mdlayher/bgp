@@ -416,6 +416,14 @@ func FuzzRawAttributeParse(f *testing.F) {
 				Value: []byte{0x00, 0x02, 0x00, 0x00, 0xfb, 0xf0, 0x00, 0x01},
 			}},
 		},
+		MPReachNLRI{
+			Family:  Family{AFI: AFILinkState, SAFI: SAFILinkState},
+			NextHop: netip.MustParseAddr("192.0.2.1"),
+			NLRI: LinkStateRoutes{{
+				Type:  LinkStateRouteNode,
+				Value: []byte{0x02, 0, 0, 0, 0, 0, 0, 0, 0},
+			}},
+		},
 		MPUnreachNLRI{
 			Family: Family{AFI: AFIL2VPN, SAFI: SAFIVPLS},
 			NLRI:   RawNLRI{0x00, 0x03, 0xde, 0xad, 0xbe},

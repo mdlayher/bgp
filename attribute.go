@@ -42,6 +42,7 @@ const (
 	AttrMPReachNLRI         AttrType = 14
 	AttrMPUnreachNLRI       AttrType = 15
 	AttrExtendedCommunities AttrType = 16
+	AttrLinkState           AttrType = 29
 	AttrLargeCommunities    AttrType = 32
 	AttrOTC                 AttrType = 35
 )

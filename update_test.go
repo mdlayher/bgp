@@ -131,6 +131,13 @@ func TestParseUpdateErrors(t *testing.T) {
 			data:    attrBytes(AttrFlagOptional, AttrMPUnreachNLRI, 0x00, 0x02, 0x01, 64, 0x20, 0x01, 0x0d),
 		},
 		{
+			name:    "MP_UNREACH_NLRI BGP-LS record truncated",
+			b:       updateBody(attrBytes(AttrFlagOptional, AttrMPUnreachNLRI, 0x40, 0x04, 0x47, 0x00, 0x01, 0x00, 0x05, 0x00, 0x00), nil),
+			code:    NotificationUpdateMessageError,
+			subcode: SubcodeOptionalAttributeError,
+			data:    attrBytes(AttrFlagOptional, AttrMPUnreachNLRI, 0x40, 0x04, 0x47, 0x00, 0x01, 0x00, 0x05, 0x00, 0x00),
+		},
+		{
 			name:    "MP_UNREACH_NLRI EVPN record truncated",
 			b:       updateBody(attrBytes(AttrFlagOptional, AttrMPUnreachNLRI, 0x00, 0x19, 0x46, 0x02, 0x05, 0x00, 0x00), nil),
 			code:    NotificationUpdateMessageError,

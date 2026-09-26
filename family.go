@@ -13,9 +13,10 @@ type AFI uint16
 // these are the ones whose reachability information this package knows the
 // shape of.
 const (
-	AFIIPv4  AFI = 1
-	AFIIPv6  AFI = 2
-	AFIL2VPN AFI = 25
+	AFIIPv4      AFI = 1
+	AFIIPv6      AFI = 2
+	AFIL2VPN     AFI = 25
+	AFILinkState AFI = 16388
 )
 
 // String returns the name of an AFI, or its number when unnamed.
@@ -27,6 +28,8 @@ func (a AFI) String() string {
 		return "IPv6"
 	case AFIL2VPN:
 		return "L2VPN"
+	case AFILinkState:
+		return "BGP-LS"
 	default:
 		return fmt.Sprintf("AFI %d", uint16(a))
 	}
@@ -39,11 +42,13 @@ type SAFI uint8
 // SAFI values named by this package, as assigned by IANA. As with AFI
 // values, naming is not a precondition for carrying a family.
 const (
-	SAFIUnicast   SAFI = 1
-	SAFIMulticast SAFI = 2
-	SAFIVPLS      SAFI = 65
-	SAFIEVPN      SAFI = 70
-	SAFIMPLSVPN   SAFI = 128
+	SAFIUnicast      SAFI = 1
+	SAFIMulticast    SAFI = 2
+	SAFIVPLS         SAFI = 65
+	SAFIEVPN         SAFI = 70
+	SAFILinkState    SAFI = 71
+	SAFILinkStateVPN SAFI = 72
+	SAFIMPLSVPN      SAFI = 128
 )
 
 // String returns the name of a SAFI, or its number when unnamed.
@@ -57,6 +62,10 @@ func (s SAFI) String() string {
 		return "VPLS"
 	case SAFIEVPN:
 		return "EVPN"
+	case SAFILinkState:
+		return "link-state"
+	case SAFILinkStateVPN:
+		return "link-state VPN"
 	case SAFIMPLSVPN:
 		return "MPLS VPN"
 	default:
@@ -73,6 +82,12 @@ type Family struct {
 
 // familyEVPN is the L2VPN EVPN family of RFC 7432, whose NLRI is EVPNRoutes.
 var familyEVPN = Family{AFI: AFIL2VPN, SAFI: SAFIEVPN}
+
+// linkState reports whether f is one of the two BGP-LS families of RFC 9552,
+// whose NLRI is LinkStateRoutes and whose next hop is an IP address.
+func (f Family) linkState() bool {
+	return f.AFI == AFILinkState && (f.SAFI == SAFILinkState || f.SAFI == SAFILinkStateVPN)
+}
 
 // String returns the name of a Family.
 func (f Family) String() string {

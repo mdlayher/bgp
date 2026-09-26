@@ -53,8 +53,15 @@ func TestParseNLRIShape(t *testing.T) {
 			want: RawNLRI(pfx),
 		},
 		{
+			// BGP-LS frames a record with a two byte type and length.
+			name: "BGP-LS",
+			f:    Family{AFI: AFILinkState, SAFI: SAFILinkState},
+			b:    []byte{0, 1, 0, 2, 192, 0},
+			want: LinkStateRoutes{{Type: LinkStateRouteNode, Value: []byte{192, 0}}},
+		},
+		{
 			name: "unmodeled AFI",
-			f:    Family{AFI: 16388, SAFI: 71},
+			f:    Family{AFI: 3, SAFI: SAFIUnicast},
 			want: RawNLRI(pfx),
 		},
 	}
@@ -90,7 +97,8 @@ func TestParseNLRIEmptyIsNil(t *testing.T) {
 		{AFI: AFIIPv6, SAFI: SAFIUnicast},
 		{AFI: AFIL2VPN, SAFI: SAFIEVPN},
 		{AFI: AFIL2VPN, SAFI: SAFIVPLS},
-		{AFI: 16388, SAFI: 71},
+		{AFI: AFILinkState, SAFI: SAFILinkState},
+		{AFI: 3, SAFI: SAFIUnicast},
 	} {
 		t.Run(f.String(), func(t *testing.T) {
 			t.Parallel()
@@ -167,12 +175,69 @@ func TestParseEVPNRoutesErrors(t *testing.T) {
 	}
 }
 
+func TestParseLinkStateRoutes(t *testing.T) {
+	t.Parallel()
+
+	// Two records back to back, the second empty: the framing is a type, a
+	// two byte length, and a value of exactly that length, and this package
+	// validates nothing beyond it.
+	b := []byte{
+		0, 1, 0, 4, 0xde, 0xad, 0xbe, 0xef,
+		0, 2, 0, 0,
+	}
+
+	got, err := parseLinkStateRoutes(b)
+	if err != nil {
+		t.Fatalf("failed to parse BGP-LS routes: %v", err)
+	}
+
+	want := LinkStateRoutes{
+		{Type: LinkStateRouteNode, Value: []byte{0xde, 0xad, 0xbe, 0xef}},
+		{Type: LinkStateRouteLink},
+	}
+
+	if d := diff(t, want, got); d != "" {
+		t.Fatalf("unexpected BGP-LS routes (-want +got):\n%s", d)
+	}
+}
+
+func TestParseLinkStateRoutesErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		b    []byte
+	}{
+		{
+			name: "record header truncated",
+			b:    []byte{0, 1, 0},
+		},
+		{
+			name: "trailing record header truncated",
+			b:    []byte{0, 1, 0, 1, 0xff, 0, 2},
+		},
+		{
+			name: "value truncated",
+			b:    []byte{0, 1, 0, 4, 0xde, 0xad},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseLinkStateRoutes(tt.b)
+			wantMessageError(t, err, NotificationUpdateMessageError, SubcodeOptionalAttributeError, nil)
+		})
+	}
+}
+
 func TestNLRINeverAliasesBuffer(t *testing.T) {
 	t.Parallel()
 
 	// ParseMessage may alias its read buffer, and pays for it with
 	// the rule that a parsed Attribute never does. The prefix shapes satisfy
-	// it by decoding into netip values; the two byte-carrying shapes have to
+	// it by decoding into netip values; the byte-carrying shapes have to
 	// clone, so pin that they do.
 	tests := []struct {
 		name string
@@ -183,6 +248,11 @@ func TestNLRINeverAliasesBuffer(t *testing.T) {
 			name: "EVPN routes",
 			f:    Family{AFI: AFIL2VPN, SAFI: SAFIEVPN},
 			b:    []byte{2, 4, 0xde, 0xad, 0xbe, 0xef},
+		},
+		{
+			name: "BGP-LS routes",
+			f:    Family{AFI: AFILinkState, SAFI: SAFILinkState},
+			b:    []byte{0, 1, 0, 4, 0xde, 0xad, 0xbe, 0xef},
 		},
 		{
 			name: "raw NLRI",
@@ -248,12 +318,14 @@ func TestFamilyString(t *testing.T) {
 		{f: Family{AFI: AFIIPv6, SAFI: SAFIMulticast}, s: "IPv6 multicast"},
 		{f: Family{AFI: AFIL2VPN, SAFI: SAFIEVPN}, s: "L2VPN EVPN"},
 		{f: Family{AFI: AFIL2VPN, SAFI: SAFIVPLS}, s: "L2VPN VPLS"},
+		{f: Family{AFI: AFILinkState, SAFI: SAFILinkState}, s: "BGP-LS link-state"},
+		{f: Family{AFI: AFILinkState, SAFI: SAFILinkStateVPN}, s: "BGP-LS link-state VPN"},
 		// Each half degrades on its own, so one unnamed number never hides
 		// the other half's name.
-		{f: Family{AFI: 16388, SAFI: 71}, s: "AFI 16388 SAFI 71"},
+		{f: Family{AFI: 3, SAFI: 133}, s: "AFI 3 SAFI 133"},
 		{f: Family{AFI: AFIL2VPN, SAFI: SAFIMPLSVPN}, s: "L2VPN MPLS VPN"},
 		{f: Family{AFI: AFIIPv4, SAFI: 133}, s: "IPv4 SAFI 133"},
-		{f: Family{AFI: 16388, SAFI: SAFIUnicast}, s: "AFI 16388 unicast"},
+		{f: Family{AFI: 3, SAFI: SAFIUnicast}, s: "AFI 3 unicast"},
 	}
 
 	for _, tt := range tests {
