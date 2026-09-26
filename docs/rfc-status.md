@@ -36,6 +36,7 @@ belongs in a package of its own, such as bgp/evpn or bgp/bgpls.
 | 2385 | TCP-MD5 | PeerConfig.MD5Password and Listener.SetMD5, Linux only, not on a DialFunc transport. Zoned IPv6 link-local peers work |
 | 5082 | GTSM | Dialer.GTSM and ListenConfig.GTSM, Linux only, not on a DialFunc transport |
 | 4486 | Cease subcodes | SubcodeCease* 1–8 |
+| 9687 | Send hold timer | Every established write runs under Identity.SendHoldTime, by default twice the negotiated hold time as in BIRD and FRR. Expiry ends the session with Send Hold Timer Expired. The NOTIFICATION is not sent after a write cut off mid-message; Close reports it either way |
 | 6608 | FSM error subcodes | Sent for an unexpected message, naming the state |
 | 9003 | Shutdown communication | PeerConfig.ShutdownCommunication; Notification.ShutdownCommunication decodes subcodes 2 and 4 |
 | 4724 | Graceful restart | Capability, Identity.GracefulRestart, Session.GracefulRestart, NewEndOfRIB and Update.EndOfRIB. Stale retention, the restart timer, and the End-of-RIB sweep are the caller's |

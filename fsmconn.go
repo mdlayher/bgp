@@ -1,6 +1,7 @@
 package bgp
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"sync/atomic"
@@ -365,18 +366,17 @@ type sessionWriter struct {
 // connection write error is terminal: the writer forwards it to the FSM
 // goroutine, exactly as a reader would, and exits.
 //
-// Every write runs under a deadline of the negotiated hold time. A peer
-// which stops reading but keeps sending KEEPALIVEs would otherwise wedge
-// the writer forever while feeding this speaker's hold timer, leaving the
-// session's liveness to the peer's own hold timer alone. A speaker which
-// cannot accept one message within a full hold time is not a functioning
-// peer, whatever it transmits; the expired write is terminal like any other
-// write failure.
+// Every write runs under a deadline of the send hold time (RFC 9687). A
+// peer which stops reading but keeps sending KEEPALIVEs would otherwise
+// wedge the writer forever while feeding this speaker's hold timer, leaving
+// the session's liveness to the peer's own hold timer alone. The expired
+// write is terminal like any other write failure, and sessionClose reports
+// it as Send Hold Timer Expired.
 func (f *FSM) writeSession(fc *fsmConn) {
 	defer close(fc.writer.exited)
 
 	write := func(m Message) error {
-		_ = fc.c.SetWriteDeadline(time.Now().Add(fc.sess.HoldTime))
+		_ = fc.c.SetWriteDeadline(time.Now().Add(cmp.Or(f.cfg.SendHoldTime, 2*fc.sess.HoldTime)))
 		return fc.c.WriteMessage(m)
 	}
 

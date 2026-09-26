@@ -3,8 +3,10 @@ package bgp
 import (
 	"context"
 	"errors"
+	"net"
 	"net/netip"
 	"os"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -387,98 +389,99 @@ drain:
 	recv(t, r.closeC, "session close")
 }
 
-// TestPeerSendWriteDeadline verifies the writer's per-write deadline: a peer
-// which stops reading wedges the writer mid-write, and the deadline of the
-// negotiated hold time must fail the write and end the session on its own —
-// the scripted peer neither closes the connection nor runs a hold timer of
-// its own. Without the deadline, session liveness would rest entirely on
-// the remote speaker's good behavior.
-func TestPeerSendWriteDeadline(t *testing.T) {
+// TestPeerSendHoldTimer verifies the send hold timer (RFC 9687): a peer
+// which stops reading wedges the writer mid-write, and the send hold time
+// must fail the write and end the session with Send Hold Timer Expired on
+// its own. The scripted peer neither closes the connection nor runs a hold
+// timer of its own. Without the timer, session liveness would rest
+// entirely on the remote speaker's good behavior.
+func TestPeerSendHoldTimer(t *testing.T) {
 	t.Parallel()
 
-	// The local proposal of 3s wins against scriptOpen's 30s, keeping the
-	// deadline the test waits out short. The scripted peer keeps sending
-	// KEEPALIVEs while it stops reading — the exact misbehavior the
-	// deadline exists for — so the FSM's own hold timer stays fed and only
-	// the write deadline can end this session.
-	r := newTCPRig(t, PeerConfig{HoldTime: 3 * time.Second})
-	s := r.acceptScript()
-	s.establish(scriptOpen())
-	recv(t, r.estC, "session establishment")
+	synctest.Test(t, func(t *testing.T) {
+		// A net.Pipe rather than a memPipe: its writes block until the far
+		// side reads, as a full socket buffer does, so a peer which stops
+		// reading wedges the writer at once.
+		conns := make(chan net.Conn, 1)
 
-	stopFeeding := make(chan struct{})
-	fed := make(chan struct{})
-	go func() {
-		defer close(fed)
-		tick := time.NewTicker(time.Second)
+		// The local proposal of 3s wins against scriptOpen's 30s, and the
+		// send hold time is 4s, the smallest whole second above it.
+		r := newPipeRig(t, PeerConfig{
+			HoldTime:     3 * time.Second,
+			SendHoldTime: 4 * time.Second,
+			DialFunc: func(context.Context) (*Conn, error) {
+				local, remote := net.Pipe()
+				conns <- remote
+				return NewConn(local), nil
+			},
+		})
+
+		s := newScript(t, <-conns)
+		s.establish(scriptOpen())
+		recv(t, r.estC, "session establishment")
+
+		u := &Update{
+			Attributes: mustAttributes(t, OriginIGP, ASPath{{ASNs: []uint32{64496}}},
+				NextHop(netip.MustParseAddr("192.0.2.1"))),
+			NLRI: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
+		}
+
+		// The UPDATE's write starts now and blocks, since the peer stops
+		// reading here. Its deadline expires at 4s.
+		var wg sync.WaitGroup
+		defer wg.Wait()
+
+		sendC := make(chan error, 1)
+		wg.Go(func() { sendC <- r.p.SendUpdate(context.Background(), u) })
+
+		// The peer keeps sending KEEPALIVEs while it stops reading, the
+		// exact misbehavior the timer exists for, so the FSM's own hold
+		// timer stays fed and only the send hold timer can end this
+		// session. Feeding every 1.5s keeps each tick clear of the 4s
+		// deadline.
+		tick := time.NewTicker(1500 * time.Millisecond)
 		defer tick.Stop()
+
+		var err error
+	feed:
 		for {
 			select {
 			case <-tick.C:
-				_ = s.c.WriteMessage(&Keepalive{})
-			case <-stopFeeding:
-				return
+				s.write(&Keepalive{})
+			case err = <-sendC:
+				break feed
 			}
 		}
-	}()
-	defer func() {
-		close(stopFeeding)
-		<-fed
-	}()
 
-	prefixes := make([]netip.Prefix, 200)
-	for i := range prefixes {
-		prefixes[i] = netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i)}), 32)
-	}
-
-	filler := &Update{
-		Attributes: mustAttributes(t, OriginIGP, ASPath{{ASNs: []uint32{64496}}},
-			NextHop(netip.MustParseAddr("192.0.2.1"))),
-		NLRI: prefixes,
-	}
-
-	errC := make(chan error, 1)
-	sends := make(chan struct{}, 1<<20)
-	go func() {
-		for {
-			if err := r.p.SendUpdate(context.Background(), filler); err != nil {
-				errC <- err
-				return
-			}
-
-			sends <- struct{}{}
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("send error is not a deadline error: %v", err)
 		}
-	}()
 
-	// Drain completions until the pusher stalls against the full socket
-	// buffers, then simply wait: the deadline must do the rest.
-	quiet := time.NewTimer(250 * time.Millisecond)
-	defer quiet.Stop()
-drain:
-	for {
-		select {
-		case <-sends:
-			quiet.Reset(250 * time.Millisecond)
-		case err := <-errC:
-			t.Fatalf("send failed before the deadline could act: %v", err)
-		case <-quiet.C:
-			break drain
+		if !errors.Is(err, ErrNotEstablished) {
+			t.Fatalf("send error does not wrap ErrNotEstablished: %v", err)
 		}
-	}
 
-	err := recv(t, errC, "the blocked send to fail")
-	if !errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("send error is not a deadline error: %v", err)
-	}
+		// The UPDATE's write sent nothing, so the NOTIFICATION follows
+		// intact once the peer reads again.
+		want := &Notification{Code: NotificationSendHoldTimerExpired}
+		s.expectNotification(want)
 
-	if !errors.Is(err, ErrNotEstablished) {
-		t.Fatalf("send error does not wrap ErrNotEstablished: %v", err)
-	}
+		c := recv(t, r.closeC, "session close")
+		if !errors.Is(c.Err, os.ErrDeadlineExceeded) {
+			t.Fatalf("close error is not a deadline error: %v", c.Err)
+		}
 
-	c := recv(t, r.closeC, "session close")
-	if !errors.Is(c.Err, os.ErrDeadlineExceeded) {
-		t.Fatalf("close error is not a deadline error: %v", c.Err)
-	}
+		wantClose := Close{
+			Notification: want,
+			Local:        true,
+			Established:  true,
+		}
+
+		c.Err = nil
+		if d := diff(t, wantClose, c); d != "" {
+			t.Fatalf("unexpected close (-want +got):\n%s", d)
+		}
+	})
 }
 
 // TestPeerBulkPush transfers a large table the documented way: a pusher

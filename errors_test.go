@@ -19,6 +19,7 @@ func TestNotificationCodeString(t *testing.T) {
 		{code: NotificationFSMError, want: "Finite State Machine Error"},
 		{code: NotificationCease, want: "Cease"},
 		{code: NotificationRouteRefreshMessageError, want: "ROUTE-REFRESH Message Error"},
+		{code: NotificationSendHoldTimerExpired, want: "Send Hold Timer Expired"},
 		{code: NotificationCode(255), want: "unknown(255)"},
 	}
 

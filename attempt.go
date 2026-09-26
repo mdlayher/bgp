@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 )
 
@@ -954,6 +955,11 @@ func sessionClose(ev connEvent) Close {
 		// this speaker's close, as is a transport its writer gave up on; a
 		// transport the reader found dead is the peer's.
 		n := notificationFromErr(ev.err)
+		if ev.local && errors.Is(ev.err, os.ErrDeadlineExceeded) {
+			// The writer's deadline is the send hold timer (RFC 9687).
+			n = &Notification{Code: NotificationSendHoldTimerExpired}
+		}
+
 		return Close{Notification: n, Err: ev.err, Local: n != nil || ev.local}
 
 	default:

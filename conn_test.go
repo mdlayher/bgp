@@ -10,9 +10,11 @@ import (
 	"net/netip"
 	"os"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"golang.org/x/net/nettest"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestConnRoundTrip(t *testing.T) {
@@ -580,6 +582,90 @@ func TestConnWriteMessageError(t *testing.T) {
 	if err := client.WriteMessage(&Open{HoldTime: 1 * time.Second}); err == nil {
 		t.Fatal("expected an error, but none occurred")
 	}
+}
+
+// TestConnWriteMessageTorn verifies that a write which fails partway
+// through a message refuses every later write: the peer is left
+// mid-message, and a NOTIFICATION sent after the fragment would reach it as
+// garbage.
+func TestConnWriteMessageTorn(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		// A synchronous in-memory pipe: the peer reads a fragment of the
+		// KEEPALIVE and stops, so the write sends exactly that much before
+		// its deadline expires.
+		peer, nc := net.Pipe()
+		client := NewConn(nc)
+		t.Cleanup(func() {
+			_ = peer.Close()
+			_ = client.Close()
+		})
+
+		var eg errgroup.Group
+		eg.Go(func() error {
+			_, err := io.ReadFull(peer, make([]byte, 10))
+			return err
+		})
+
+		if err := client.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatalf("failed to set write deadline: %v", err)
+		}
+
+		if err := client.WriteMessage(&Keepalive{}); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("expected os.ErrDeadlineExceeded, but got: %v", err)
+		}
+
+		if err := eg.Wait(); err != nil {
+			t.Fatalf("failed to read fragment: %v", err)
+		}
+
+		if err := client.WriteMessage(&Notification{Code: NotificationCease}); !errors.Is(err, ErrTornWrite) {
+			t.Fatalf("expected ErrTornWrite, but got: %v", err)
+		}
+	})
+}
+
+// TestConnWriteMessageDeadlineIntact verifies that a write whose deadline
+// expires before any byte is sent leaves the Conn usable.
+func TestConnWriteMessageDeadlineIntact(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		// With no reader on the pipe, no byte of the write can be sent.
+		peer, nc := net.Pipe()
+		client := NewConn(nc)
+		t.Cleanup(func() {
+			_ = peer.Close()
+			_ = client.Close()
+		})
+
+		if err := client.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatalf("failed to set write deadline: %v", err)
+		}
+
+		if err := client.WriteMessage(&Keepalive{}); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("expected os.ErrDeadlineExceeded, but got: %v", err)
+		}
+
+		if err := client.SetWriteDeadline(time.Time{}); err != nil {
+			t.Fatalf("failed to clear write deadline: %v", err)
+		}
+
+		var eg errgroup.Group
+		eg.Go(func() error {
+			_, err := NewConn(peer).ReadMessage()
+			return err
+		})
+
+		if err := client.WriteMessage(&Keepalive{}); err != nil {
+			t.Fatalf("failed to write after an intact deadline: %v", err)
+		}
+
+		if err := eg.Wait(); err != nil {
+			t.Fatalf("failed to read message: %v", err)
+		}
+	})
 }
 
 func TestTCPOptionsCheck(t *testing.T) {

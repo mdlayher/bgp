@@ -52,6 +52,17 @@ func TestNewPeerErrors(t *testing.T) {
 			c:    valid(func(c *PeerConfig) { c.HoldTime = 2 * time.Second }),
 		},
 		{
+			name: "send hold time not above default hold time",
+			c:    valid(func(c *PeerConfig) { c.SendHoldTime = 90 * time.Second }),
+		},
+		{
+			name: "send hold time not above hold time",
+			c: valid(func(c *PeerConfig) {
+				c.HoldTime = 30 * time.Second
+				c.SendHoldTime = 20 * time.Second
+			}),
+		},
+		{
 			name: "four octet capability",
 			c: valid(func(c *PeerConfig) {
 				c.Capabilities = []Capability{{

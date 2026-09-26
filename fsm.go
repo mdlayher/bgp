@@ -83,6 +83,14 @@ type Identity struct {
 	// connection is never detected.
 	HoldTime time.Duration
 
+	// SendHoldTime bounds how long a message may wait to be written to an
+	// established peer (RFC 9687). A peer which stops reading, even while
+	// it keeps sending KEEPALIVEs, wedges every write; when one write takes
+	// longer than SendHoldTime, the session ends with Send Hold Timer
+	// Expired. The zero value is twice the negotiated hold time, as in
+	// BIRD and FRR. A nonzero value must be greater than HoldTime.
+	SendHoldTime time.Duration
+
 	// PeerASN is the remote autonomous system number, or zero to accept
 	// any. A peer whose OPEN carries a different ASN is rejected with Bad
 	// Peer AS. With PeerID it pins who may answer. Where the peer is, is
@@ -457,6 +465,10 @@ func NewFSM(c FSMConfig) (*FSM, error) {
 	}
 
 	c.HoldTime = c.HoldTime.Truncate(time.Second)
+
+	if c.SendHoldTime != 0 && c.SendHoldTime <= c.HoldTime {
+		return nil, fmt.Errorf("bgp: send hold time must be zero or greater than the hold time %s: %s", c.HoldTime, c.SendHoldTime)
+	}
 
 	if !c.Passive && c.DialFunc == nil {
 		return nil, errors.New("bgp: an FSM which is not Passive requires a DialFunc; a closure over Dialer.Dial is the plain TCP implementation, and Peer supplies one automatically")

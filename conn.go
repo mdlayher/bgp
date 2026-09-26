@@ -19,6 +19,11 @@ import (
 // buffered in its entirety.
 const readBufferSize = 64 * 1024
 
+// ErrTornWrite is returned by Conn.WriteMessage once an earlier write
+// failed partway through a message: the peer is left mid-message, and any
+// further bytes would be misframed.
+var ErrTornWrite = errors.New("bgp: an earlier write was interrupted mid-message")
+
 // A Conn sends and receives BGP messages over an underlying connection.
 //
 // Conn only frames messages on and off the connection. It implements no
@@ -36,8 +41,9 @@ type Conn struct {
 	rmu sync.Mutex
 	br  *bufio.Reader
 
-	wmu sync.Mutex
-	wb  []byte
+	wmu  sync.Mutex
+	wb   []byte
+	torn bool
 
 	// tap, when set, observes every framed message in both directions;
 	// see FSMConfig.OnMessage. It is installed once, under both locks, by
@@ -200,9 +206,19 @@ func (c *Conn) ReadMessage() (ReadResult, error) {
 //
 // A marshal failure is returned wrapped, so errors.Is and errors.As reach
 // the original error; no byte reaches the connection.
+//
+// A write which fails after part of m reached the connection leaves the
+// peer mid-message, so every later WriteMessage fails with ErrTornWrite
+// rather than sending bytes the peer would misframe. A write which fails
+// before any byte is sent, such as on an expired deadline, leaves the Conn
+// usable.
 func (c *Conn) WriteMessage(m Message) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+
+	if c.torn {
+		return ErrTornWrite
+	}
 
 	// Marshal into the reused write buffer, retaining any capacity it gained.
 	b, err := m.AppendBinary(c.wb[:0])
@@ -212,7 +228,8 @@ func (c *Conn) WriteMessage(m Message) error {
 
 	c.wb = b
 
-	_, err = c.c.Write(b)
+	n, err := c.c.Write(b)
+	c.torn = n > 0 && n < len(b)
 	c.observeLocked(DirectionSent, b, m, err)
 	return err
 }

@@ -19,6 +19,7 @@ const (
 	NotificationFSMError                 NotificationCode = 5
 	NotificationCease                    NotificationCode = 6
 	NotificationRouteRefreshMessageError NotificationCode = 7
+	NotificationSendHoldTimerExpired     NotificationCode = 8
 )
 
 // String returns the name of a NotificationCode.
@@ -38,6 +39,8 @@ func (c NotificationCode) String() string {
 		return "Cease"
 	case NotificationRouteRefreshMessageError:
 		return "ROUTE-REFRESH Message Error"
+	case NotificationSendHoldTimerExpired:
+		return "Send Hold Timer Expired"
 	default:
 		return fmt.Sprintf("unknown(%d)", uint8(c))
 	}
