@@ -121,6 +121,23 @@ Locks:
   exception is work the lock exists to serialize, which says as much where
   it happens.
 
+Logging:
+
+- A log call on a per-message path is guarded by
+  `if f.log.Enabled(ctx, slog.LevelDebug)`. `slog` checks the level inside
+  the call, after Go has evaluated the arguments and boxed each one into
+  an `any`, so a disabled Debug still pays for every argument it was
+  given. Two allocations per UPDATE are invisible in steady state and very
+  visible during a full-table convergence burst. The guard belongs on the
+  read loop, the writer loop, and anything else which runs per message. It
+  is noise anywhere else, so per-connection and per-transition logs go
+  unguarded.
+- What the boxing costs depends on the value. A pointer, an `error`, a
+  string already in hand, and a small integer type such as `origin` box
+  for free. A large `int`, a multi-word struct, and a string built at the
+  call site by `String` or `Sprintf` each allocate. An argument of the
+  second kind on a hot path is the one which has to be guarded.
+
 Code comments:
 
 - State the contract directly, and the reasoning once: a doc comment says
