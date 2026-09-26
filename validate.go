@@ -5,7 +5,10 @@
 
 package bgp
 
-import "fmt"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 // An outcome is an RFC 7606, section 2 error handling approach, ordered
 // weakest to strongest so the strongest of several is their maximum, as
@@ -191,9 +194,9 @@ func (r attrRule) validate(a *RawAttribute) *MessageError {
 
 // checkAttrContent checks the four types whose data says more than its
 // length does: the defined values of ORIGIN, the segment framing of
-// AS_PATH, and the RFC 7606, section 5.3 minimum lengths of the
-// multiprotocol attributes, below which they name no family. It is reached
-// only for a type whose rule sets content.
+// AS_PATH, and the multiprotocol attributes' family header, next hop, and
+// NLRI syntax per RFC 7606, section 5.3. It is reached only for a type
+// whose rule sets content.
 func checkAttrContent(a *RawAttribute) *MessageError {
 	switch a.Type {
 	case AttrOrigin:
@@ -208,11 +211,163 @@ func checkAttrContent(a *RawAttribute) *MessageError {
 			return updateError(SubcodeOptionalAttributeError, nil,
 				"invalid MP_REACH_NLRI attribute length %d", len(a.Data))
 		}
+
+		return validateMPReach(a.Data, a.addPath)
 	case AttrMPUnreachNLRI:
 		if len(a.Data) < 3 {
 			return updateError(SubcodeOptionalAttributeError, nil,
 				"invalid MP_UNREACH_NLRI attribute length %d", len(a.Data))
 		}
+
+		return validateNLRI(a.Data[3:], mpFamily(a.Data), a.addPath)
+	}
+
+	return nil
+}
+
+// mpFamily reads the family header of a multiprotocol attribute's data,
+// which is at least 3 bytes.
+func mpFamily(b []byte) Family {
+	return Family{
+		AFI:  AFI(binary.BigEndian.Uint16(b[0:2])),
+		SAFI: SAFI(b[2]),
+	}
+}
+
+// validateMPReach checks MP_REACH_NLRI data past its family header: the
+// next hop frames and is valid for the family, then the NLRI frames.
+func validateMPReach(b []byte, addPath bool) *MessageError {
+	f := mpFamily(b)
+	n := int(b[3])
+	if len(b[4:]) < n+1 {
+		return updateError(SubcodeOptionalAttributeError, nil,
+			"MP_REACH_NLRI next hop truncated")
+	}
+
+	if merr := validateNextHop(f, b[4:4+n]); merr != nil {
+		return merr
+	}
+
+	// One reserved byte, then NLRI.
+	return validateNLRI(b[4+n+1:], f, addPath)
+}
+
+// validateNextHop checks an MP_REACH_NLRI next hop of family f. A family
+// whose next hop this package models must carry one of that family's
+// lengths; a family it does not model may carry any length. Zero is an
+// absent next hop for any family.
+func validateNextHop(f Family, nh []byte) *MessageError {
+	switch n := len(nh); {
+	case n == 0:
+		return nil
+	case f.rdNextHop():
+		return validateRDNextHop(f, nh)
+	case f.prefixShaped() && n != 4 && n != 16 && n != 32:
+		return unsupportedNextHop(f, n)
+	default:
+		return nil
+	}
+}
+
+// validateRDNextHop checks a VPN family's next hop: one address or a pair,
+// each behind an 8 byte route distinguisher which must be zero.
+func validateRDNextHop(f Family, nh []byte) *MessageError {
+	switch len(nh) {
+	case 12, 24:
+		return zeroRD(nh[0:8])
+	case 48:
+		if merr := zeroRD(nh[0:8]); merr != nil {
+			return merr
+		}
+
+		return zeroRD(nh[24:32])
+	default:
+		return unsupportedNextHop(f, len(nh))
+	}
+}
+
+// unsupportedNextHop is the error for a next hop length family f does not
+// define.
+func unsupportedNextHop(f Family, n int) *MessageError {
+	return updateError(SubcodeOptionalAttributeError, nil,
+		"unsupported %s next hop length %d", f, n)
+}
+
+// zeroRD checks that the 8 byte route distinguisher preceding a VPN next
+// hop is zero, as RFC 4364, section 4.3.2 and RFC 4659, section 3.2.1.1
+// require.
+func zeroRD(b []byte) *MessageError {
+	if [8]byte(b) != [8]byte{} {
+		return updateError(SubcodeOptionalAttributeError, nil,
+			"MP_REACH_NLRI next hop route distinguisher must be zero")
+	}
+
+	return nil
+}
+
+// validateNLRI checks that the NLRI of family f frames, in the shape
+// parseNLRI decodes it. A family this package does not model is opaque
+// and always valid.
+func validateNLRI(b []byte, f Family, addPath bool) *MessageError {
+	switch {
+	case f.prefixShaped():
+		// prefixShaped implies an AFI with a prefix length.
+		max, _ := prefixBits(f.AFI)
+		return validatePrefixes(b, max, addPath)
+	case f == familyEVPN:
+		return validateEVPNRoutes(b)
+	default:
+		return nil
+	}
+}
+
+// validatePrefixes checks that b frames as prefixes of at most max bits,
+// each behind a 4 byte path identifier when addPath is set.
+func validatePrefixes(b []byte, max int, addPath bool) *MessageError {
+	for len(b) > 0 {
+		if addPath {
+			if len(b) < 5 {
+				return updateError(SubcodeOptionalAttributeError, nil,
+					"path identifier truncated")
+			}
+
+			b = b[4:]
+		}
+
+		bits := int(b[0])
+		if bits > max {
+			return updateError(SubcodeOptionalAttributeError, nil,
+				"prefix length %d exceeds maximum of %d bits", bits, max)
+		}
+
+		n := 1 + (bits+7)/8
+		if len(b) < n {
+			return updateError(SubcodeOptionalAttributeError, nil,
+				"prefix truncated")
+		}
+
+		b = b[n:]
+	}
+
+	return nil
+}
+
+// validateEVPNRoutes checks that b frames as EVPN records: a type, a
+// length, and that many bytes.
+func validateEVPNRoutes(b []byte) *MessageError {
+	for len(b) > 0 {
+		if len(b) < 2 {
+			return updateError(SubcodeOptionalAttributeError, nil,
+				"EVPN NLRI record header truncated")
+		}
+
+		n := int(b[1])
+		if len(b[2:]) < n {
+			return updateError(SubcodeOptionalAttributeError, nil,
+				"EVPN NLRI record truncated: %d of %d bytes", len(b[2:]), n)
+		}
+
+		b = b[2+n:]
 	}
 
 	return nil

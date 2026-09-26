@@ -100,6 +100,44 @@ func TestParseUpdateErrors(t *testing.T) {
 			data:    attrBytes(AttrFlagOptional, AttrMPUnreachNLRI, 0x00, 0x02),
 		},
 		{
+			// RFC 7606, sections 5.3 and 7.11: a multiprotocol attribute
+			// whose next hop or NLRI does not frame leaves the routes it
+			// carries unlocatable.
+			name:    "MP_REACH_NLRI next hop truncated",
+			b:       updateBody(mpReachBytes(v6Unicast(), 16, []byte{0x20, 0x01, 0x0d, 0xb8}, nil), nil),
+			code:    NotificationUpdateMessageError,
+			subcode: SubcodeOptionalAttributeError,
+			data:    mpReachBytes(v6Unicast(), 16, []byte{0x20, 0x01, 0x0d, 0xb8}, nil),
+		},
+		{
+			name:    "MP_REACH_NLRI prefix too long",
+			b:       updateBody(mpReachBytes(v6Unicast(), 16, make([]byte, 16), []byte{129, 0x20, 0x01}), nil),
+			code:    NotificationUpdateMessageError,
+			subcode: SubcodeOptionalAttributeError,
+			data:    mpReachBytes(v6Unicast(), 16, make([]byte, 16), []byte{129, 0x20, 0x01}),
+		},
+		{
+			name:    "MP_REACH_NLRI nonzero route distinguisher",
+			b:       updateBody(mpReachBytes(v4VPN(), 12, []byte{0, 0, 0, 1, 0, 0, 0, 0, 192, 0, 2, 1}, nil), nil),
+			code:    NotificationUpdateMessageError,
+			subcode: SubcodeOptionalAttributeError,
+			data:    mpReachBytes(v4VPN(), 12, []byte{0, 0, 0, 1, 0, 0, 0, 0, 192, 0, 2, 1}, nil),
+		},
+		{
+			name:    "MP_UNREACH_NLRI prefix truncated",
+			b:       updateBody(attrBytes(AttrFlagOptional, AttrMPUnreachNLRI, 0x00, 0x02, 0x01, 64, 0x20, 0x01, 0x0d), nil),
+			code:    NotificationUpdateMessageError,
+			subcode: SubcodeOptionalAttributeError,
+			data:    attrBytes(AttrFlagOptional, AttrMPUnreachNLRI, 0x00, 0x02, 0x01, 64, 0x20, 0x01, 0x0d),
+		},
+		{
+			name:    "MP_UNREACH_NLRI EVPN record truncated",
+			b:       updateBody(attrBytes(AttrFlagOptional, AttrMPUnreachNLRI, 0x00, 0x19, 0x46, 0x02, 0x05, 0x00, 0x00), nil),
+			code:    NotificationUpdateMessageError,
+			subcode: SubcodeOptionalAttributeError,
+			data:    attrBytes(AttrFlagOptional, AttrMPUnreachNLRI, 0x00, 0x19, 0x46, 0x02, 0x05, 0x00, 0x00),
+		},
+		{
 			// An attribute whose Optional bit is clear is well known by
 			// definition, and RFC 7606 does not revise RFC 4271, section
 			// 6.3 for one the receiver does not recognize.
@@ -306,18 +344,32 @@ func TestParseUpdateAddPathErrors(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		body []byte
+		name    string
+		body    []byte
+		subcode uint8
+
+		// data is the erroneous attribute an attribute error echoes.
+		data []byte
 	}{
 		{
 			// Two bytes of withdrawn field cannot hold a four byte path
 			// identifier.
-			name: "withdrawn path identifier truncated",
-			body: []byte{0x00, 0x02, 0x00, 0x00, 0x00, 0x00},
+			name:    "withdrawn path identifier truncated",
+			body:    []byte{0x00, 0x02, 0x00, 0x00, 0x00, 0x00},
+			subcode: SubcodeInvalidNetworkField,
 		},
 		{
-			name: "NLRI prefix truncated",
-			body: []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 24, 192},
+			name:    "NLRI prefix truncated",
+			body:    []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 24, 192},
+			subcode: SubcodeInvalidNetworkField,
+		},
+		{
+			// The MP_REACH_NLRI is marked add-path for its family, so its
+			// NLRI is checked with a path identifier before each prefix.
+			name:    "MP_REACH_NLRI path identifier truncated",
+			body:    updateBody(mpReachBytes(v4Unicast(), 4, []byte{192, 0, 2, 1}, []byte{0x00, 0x00, 0x00}), nil),
+			subcode: SubcodeOptionalAttributeError,
+			data:    mpReachBytes(v4Unicast(), 4, []byte{192, 0, 2, 1}, []byte{0x00, 0x00, 0x00}),
 		},
 	}
 
@@ -329,7 +381,7 @@ func TestParseUpdateAddPathErrors(t *testing.T) {
 				testMessage(MessageTypeUpdate, tt.body),
 				[]Family{{AFI: AFIIPv4, SAFI: SAFIUnicast}},
 			)
-			wantMessageError(t, err, NotificationUpdateMessageError, SubcodeInvalidNetworkField, nil)
+			wantMessageError(t, err, NotificationUpdateMessageError, tt.subcode, tt.data)
 		})
 	}
 }
@@ -438,6 +490,13 @@ func TestParseUpdateMalformed(t *testing.T) {
 			// for routes carried in MP_REACH_NLRI, which names its own.
 			name:  "NEXT_HOP absent beside MP_REACH_NLRI only",
 			attrs: concat(originAttr(), asPathAttr(), mpReachAttr()),
+			kept:  3,
+		},
+		{
+			// A family this package does not model may carry a next hop of
+			// any length and an NLRI of any shape.
+			name:  "MP_REACH_NLRI unmodeled family",
+			attrs: concat(originAttr(), asPathAttr(), mpReachBytes(nsap(), 6, []byte{1, 2, 3, 4, 5, 6}, []byte{0xff, 0xfe})),
 			kept:  3,
 		},
 		{
@@ -760,6 +819,25 @@ func mpReachAttr() []byte {
 	}
 
 	return attrBytes(AttrFlagOptional, AttrMPReachNLRI, data...)
+}
+
+// The families hand-built multiprotocol attributes use. nsap is one this
+// package does not model and never will: CLNP over BGP, whose next hop is
+// an NSAP address rather than an IP one.
+func v4Unicast() Family { return Family{AFI: AFIIPv4, SAFI: SAFIUnicast} }
+func v6Unicast() Family { return Family{AFI: AFIIPv6, SAFI: SAFIUnicast} }
+func v4VPN() Family     { return Family{AFI: AFIIPv4, SAFI: SAFIMPLSVPN} }
+func nsap() Family      { return Family{AFI: AFI(3), SAFI: SAFIUnicast} }
+
+// mpReachBytes is a hand-built MP_REACH_NLRI attribute: the family, a next
+// hop length field of n, the next hop bytes as given, whether or not they
+// match n, one reserved byte, and the NLRI bytes.
+func mpReachBytes(f Family, n int, nextHop, nlri []byte) []byte {
+	data := binary.BigEndian.AppendUint16(nil, uint16(f.AFI))
+	data = append(data, byte(f.SAFI), byte(n))
+	data = append(data, nextHop...)
+	data = append(data, 0x00)
+	return attrBytes(AttrFlagOptional, AttrMPReachNLRI, append(data, nlri...)...)
 }
 
 func mpUnreachAttr() []byte {

@@ -94,25 +94,19 @@ func (m MPReachNLRI) appendData(b []byte) ([]byte, error) {
 // parseMPReachNLRI parses the data of an MP_REACH_NLRI attribute. addPath
 // reports that the attribute arrived on a session which negotiated the
 // add-path extension for its family in the receive direction; see
-// RawAttribute.addPath. attrRule.validate guarantees the minimum length RFC
-// 7606, section 5.3 names, so the family header is whole here.
+// RawAttribute.addPath. attrRule.validate has checked the syntax, so the
+// family header, next hop, and NLRI all frame here.
 func parseMPReachNLRI(b []byte, addPath bool) (MPReachNLRI, error) {
-	m := MPReachNLRI{Family: Family{
-		AFI:  AFI(binary.BigEndian.Uint16(b[0:2])),
-		SAFI: SAFI(b[2]),
-	}}
-
-	n := int(b[3])
-	if len(b[4:]) < n+1 {
-		return MPReachNLRI{}, updateError(SubcodeOptionalAttributeError, nil,
-			"MP_REACH_NLRI next hop truncated")
-	}
+	m := MPReachNLRI{Family: mpFamily(b)}
 
 	// The valid lengths depend on the family: a VPN family's addresses are
 	// each preceded by an 8 byte route distinguisher, mandated zero and
 	// stripped here (see Family.rdNextHop), so parse accepts exactly the
 	// lengths marshal produces and the fixed point holds. A length of zero
-	// is an absent next hop for any family (RFC 8955 sends one).
+	// is an absent next hop for any family (RFC 8955 sends one). A family
+	// this package does not model passes validation with any length, and
+	// one this switch cannot decode is unsupported rather than malformed.
+	n := int(b[3])
 	nh := b[4 : 4+n]
 	switch rd := m.Family.rdNextHop(); {
 	case n == 0:
@@ -124,26 +118,10 @@ func parseMPReachNLRI(b []byte, addPath bool) (MPReachNLRI, error) {
 		m.NextHop = netip.AddrFrom16([16]byte(nh[0:16]))
 		m.LinkLocal = netip.AddrFrom16([16]byte(nh[16:32]))
 	case rd && n == 12:
-		if err := zeroRD(nh[0:8]); err != nil {
-			return MPReachNLRI{}, err
-		}
-
 		m.NextHop = netip.AddrFrom4([4]byte(nh[8:12]))
 	case rd && n == 24:
-		if err := zeroRD(nh[0:8]); err != nil {
-			return MPReachNLRI{}, err
-		}
-
 		m.NextHop = netip.AddrFrom16([16]byte(nh[8:24]))
 	case rd && n == 48:
-		if err := zeroRD(nh[0:8]); err != nil {
-			return MPReachNLRI{}, err
-		}
-
-		if err := zeroRD(nh[24:32]); err != nil {
-			return MPReachNLRI{}, err
-		}
-
 		m.NextHop = netip.AddrFrom16([16]byte(nh[8:24]))
 		m.LinkLocal = netip.AddrFrom16([16]byte(nh[32:48]))
 	default:
@@ -159,19 +137,6 @@ func parseMPReachNLRI(b []byte, addPath bool) (MPReachNLRI, error) {
 
 	m.NLRI = nlri
 	return m, nil
-}
-
-// zeroRD checks that the 8 byte route distinguisher preceding a VPN next
-// hop address is zero, the only value RFC 4364, section 4.3.2 and RFC 4659,
-// section 3.2.1.1 permit. Anything else is information this package has no
-// field for precisely because the RFCs promise there is none.
-func zeroRD(b []byte) error {
-	if [8]byte(b) != [8]byte{} {
-		return updateError(SubcodeOptionalAttributeError, nil,
-			"MP_REACH_NLRI next hop route distinguisher must be zero")
-	}
-
-	return nil
 }
 
 // An MPUnreachNLRI is the MP_UNREACH_NLRI attribute, withdrawing routes for
@@ -196,12 +161,9 @@ func (m MPUnreachNLRI) appendData(b []byte) ([]byte, error) {
 }
 
 // parseMPUnreachNLRI parses the data of an MP_UNREACH_NLRI attribute;
-// addPath and the guaranteed minimum length are as in parseMPReachNLRI.
+// addPath and the checked syntax are as in parseMPReachNLRI.
 func parseMPUnreachNLRI(b []byte, addPath bool) (MPUnreachNLRI, error) {
-	m := MPUnreachNLRI{Family: Family{
-		AFI:  AFI(binary.BigEndian.Uint16(b[0:2])),
-		SAFI: SAFI(b[2]),
-	}}
+	m := MPUnreachNLRI{Family: mpFamily(b)}
 
 	nlri, err := parseNLRI(b[3:], m.Family, addPath)
 	if err != nil {

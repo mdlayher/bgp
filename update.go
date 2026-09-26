@@ -179,10 +179,6 @@ type UpdateDiagnostics struct {
 	// MP_UNREACH_NLRI apply as usual. The Update is left exactly as parsed
 	// so the consumer can do this.
 	//
-	// Parsing an MP_REACH_NLRI to name its prefixes may itself fail; the
-	// handler returns that error to reset the session, as RFC 7606,
-	// section 5.3 requires.
-	//
 	// The error describes the first malformed attribute in wire order,
 	// with the subcode RFC 7606 assigns and the attribute echoed in Data.
 	// Do not send its Notification to the peer: that is the session reset
