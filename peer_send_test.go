@@ -27,7 +27,11 @@ func TestPeerSendNotEstablished(t *testing.T) {
 			t.Fatalf("expected ErrNotEstablished before establishment, but got: %v", err)
 		}
 
-		v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+		v4u := Family{
+			AFI:  AFIIPv4,
+			SAFI: SAFIUnicast,
+		}
+
 		if err := r.p.SendRouteRefresh(context.Background(), v4u); !errors.Is(err, ErrNotEstablished) {
 			t.Fatalf("expected ErrNotEstablished before establishment, but got: %v", err)
 		}
@@ -117,13 +121,16 @@ func TestPeerSendUpdate(t *testing.T) {
 	})
 }
 
-// TestPeerSendRouteRefresh verifies the RFC 2918 negotiation gate: a
-// negotiated refresh reaches the wire, an unnegotiated one is refused
-// locally.
+// TestPeerSendRouteRefreshNegotiated and TestPeerSendRouteRefreshUnnegotiated
+// verify the RFC 2918 negotiation gate: a negotiated refresh reaches the
+// wire, an unnegotiated one is refused locally.
 func TestPeerSendRouteRefreshNegotiated(t *testing.T) {
 	t.Parallel()
 
-	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+	v4u := Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIUnicast,
+	}
 
 	synctest.Test(t, func(t *testing.T) {
 		r := newPipeRig(t, PeerConfig{})
@@ -153,7 +160,10 @@ func TestPeerSendRouteRefreshNegotiated(t *testing.T) {
 func TestPeerSendRouteRefreshUnnegotiated(t *testing.T) {
 	t.Parallel()
 
-	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+	v4u := Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIUnicast,
+	}
 
 	synctest.Test(t, func(t *testing.T) {
 		r := newPipeRig(t, PeerConfig{})
@@ -175,7 +185,10 @@ func TestPeerSendRouteRefreshUnnegotiated(t *testing.T) {
 func TestPeerSendRouteRefreshDemarcations(t *testing.T) {
 	t.Parallel()
 
-	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+	v4u := Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIUnicast,
+	}
 
 	// The peer advertises plain route refresh in both cases; only the
 	// enhanced capability varies.
@@ -243,7 +256,11 @@ func TestPeerSendRouteRefreshDemarcations(t *testing.T) {
 					t.Fatalf("failed to send %s: %v", tt.name, err)
 				}
 
-				want := &RouteRefresh{Family: v4u, Subtype: tt.subtype}
+				want := &RouteRefresh{
+					Family:  v4u,
+					Subtype: tt.subtype,
+				}
+
 				if d := diff[Message](t, want, s.read()); d != "" {
 					t.Fatalf("unexpected %s (-want +got):\n%s", tt.name, d)
 				}
@@ -329,6 +346,11 @@ func TestPeerSendCanceledContext(t *testing.T) {
 func TestPeerSendBackpressure(t *testing.T) {
 	t.Parallel()
 
+	// Registered before the rig, so the pusher is joined after the rig's
+	// teardown has ended the session and failed any send still blocked.
+	var wg sync.WaitGroup
+	t.Cleanup(wg.Wait)
+
 	r := newTCPRig(t, PeerConfig{})
 	s := r.acceptScript()
 	s.establish(scriptOpen())
@@ -351,7 +373,7 @@ func TestPeerSendBackpressure(t *testing.T) {
 	// costs nothing; it exists so the pusher can never block on reporting.
 	errC := make(chan error, 1)
 	sends := make(chan struct{}, 1<<20)
-	go func() {
+	wg.Go(func() {
 		for {
 			if err := r.p.SendUpdate(context.Background(), filler); err != nil {
 				errC <- err
@@ -360,7 +382,7 @@ func TestPeerSendBackpressure(t *testing.T) {
 
 			sends <- struct{}{}
 		}
-	}()
+	})
 
 	// Drain completions until the pusher stalls: a quiet period with no
 	// completed send means it is parked inside SendUpdate by backpressure.
@@ -507,12 +529,17 @@ func TestPeerBulkPush(t *testing.T) {
 		}
 	}
 
+	// Registered before the rig, so the pusher is joined after the rig's
+	// teardown has canceled the session context it obeys.
+	var wg sync.WaitGroup
+	t.Cleanup(wg.Wait)
+
 	pushedC := make(chan error, 1)
 	r := newTCPRig(t, PeerConfig{
 		OnEstablished: func(ctx context.Context, p *Peer, _ Session) error {
 			// The documented pattern: bulk transmission never runs
 			// synchronously in a handler; a pusher goroutine does it.
-			go func() {
+			wg.Go(func() {
 				for _, u := range updates {
 					if err := p.SendUpdate(ctx, u); err != nil {
 						pushedC <- err
@@ -521,7 +548,8 @@ func TestPeerBulkPush(t *testing.T) {
 				}
 
 				pushedC <- nil
-			}()
+			})
+
 			return nil
 		},
 	})

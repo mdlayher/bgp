@@ -107,26 +107,25 @@ func buildPeer(tb testing.TB, addr netip.Addr, cfg PeerConfig) *peerRig {
 // start runs the rig's Peer in the background. Run must exit via
 // cancellation by the end of the test.
 func (r *peerRig) start() *peerRig {
-	tb, p := r.tb, r.p
-	tb.Helper()
+	r.tb.Helper()
 
 	ctx, cancel := context.WithCancelCause(context.Background())
 	r.cancelCause = cancel
 	r.cancel = func() { cancel(nil) }
 	runC := make(chan error, 1)
-	go func() { runC <- p.Run(ctx) }()
+	go func() { runC <- r.p.Run(ctx) }()
 
-	tb.Cleanup(func() {
+	r.tb.Cleanup(func() {
 		cancel(nil)
-		if err := recv(tb, runC, "Run to return"); !errors.Is(err, context.Canceled) {
-			tb.Errorf("unexpected Run error: %v", err)
+		if err := recv(r.tb, runC, "Run to return"); !errors.Is(err, context.Canceled) {
+			r.tb.Errorf("unexpected Run error: %v", err)
 		}
 	})
 
 	// Run starts concurrently, and a DeliverConn which outraces it is
 	// refused; wait until the Peer is accepting so tests need not tolerate
 	// the startup window.
-	waitRunning(tb, p)
+	waitRunning(r.tb, r.p)
 	return r
 }
 
@@ -166,7 +165,7 @@ func newPipeRig(tb testing.TB, cfg PeerConfig) *peerRig {
 	}
 
 	// A DialFunc transport addresses its peer itself: raddr stays zero, so
-	// a delivered memConn — which carries no address — passes unchecked.
+	// a delivered memConn, which carries no address, passes unchecked.
 	r := buildPeer(tb, netip.Addr{}, cfg)
 	r.p.fsm.jitter = func() float64 { return 1 }
 	r.dials = dials
@@ -177,15 +176,8 @@ func newPipeRig(tb testing.TB, cfg PeerConfig) *peerRig {
 func waitRunning(tb testing.TB, p *Peer) {
 	tb.Helper()
 
-	// The lock covers the field load only, because Run replaces the field
-	// when it stops. The copied channel value still refers to the same
-	// underlying channel, so Run's close is visible through it.
-	p.mu.Lock()
-	runningC := p.runningC
-	p.mu.Unlock()
-
 	select {
-	case <-runningC:
+	case <-p.running():
 	case <-time.After(peerTimeout):
 		tb.Fatal("timed out waiting for Run to start")
 	}
@@ -229,23 +221,14 @@ func (r *peerRig) acceptScript() *script {
 		return recv(r.tb, r.dials, "the peer to dial")
 	}
 
-	type accepted struct {
-		c   net.Conn
-		err error
+	// A deadline bounds the wait, so no goroutine is left parked in Accept.
+	_ = r.l.(*net.TCPListener).SetDeadline(time.Now().Add(peerTimeout))
+	c, err := r.l.Accept()
+	if err != nil {
+		r.tb.Fatalf("failed to accept the peer's dial: %v", err)
 	}
 
-	acceptC := make(chan accepted, 1)
-	go func() {
-		c, err := r.l.Accept()
-		acceptC <- accepted{c: c, err: err}
-	}()
-
-	a := recv(r.tb, acceptC, "the peer to dial")
-	if a.err != nil {
-		r.tb.Fatalf("failed to accept: %v", a.err)
-	}
-
-	return newScript(r.tb, a.c)
+	return newScript(r.tb, c)
 }
 
 // deliver creates a loopback connection pair, hands one side to the Peer as
@@ -267,7 +250,11 @@ func (r *peerRig) deliver() *script {
 		r.tb.Fatalf("failed to deliver connection: %v", err)
 	}
 
-	return &script{tb: r.tb, nc: server.rawConn(), c: server}
+	return &script{
+		tb: r.tb,
+		nc: server.rawConn(),
+		c:  server,
+	}
 }
 
 // A script is the scripted peer of the FSM plan: the raw side of a
@@ -282,7 +269,11 @@ type script struct {
 func newScript(tb testing.TB, nc net.Conn) *script {
 	tb.Helper()
 	tb.Cleanup(func() { _ = nc.Close() })
-	return &script{tb: tb, nc: nc, c: NewConn(nc)}
+	return &script{
+		tb: tb,
+		nc: nc,
+		c:  NewConn(nc),
+	}
 }
 
 // read returns the next message from the Peer.
@@ -434,12 +425,20 @@ func rawMessage(typ MessageType, body []byte) []byte {
 	return append(b, body...)
 }
 
-// rawOpenBody hand-builds an OPEN body with no optional parameters.
-func rawOpenBody(version byte, asn uint16, hold uint16, id uint32) []byte {
-	b := []byte{version}
-	b = binary.BigEndian.AppendUint16(b, asn)
-	b = binary.BigEndian.AppendUint16(b, hold)
-	b = binary.BigEndian.AppendUint32(b, id)
+// rawOpen holds the fixed fields of a hand-built OPEN body, which may carry
+// values Open would refuse to marshal.
+type rawOpen struct {
+	version   byte
+	asn, hold uint16
+	id        uint32
+}
+
+// rawOpenBody hand-builds an OPEN body from o with no optional parameters.
+func rawOpenBody(o rawOpen) []byte {
+	b := []byte{o.version}
+	b = binary.BigEndian.AppendUint16(b, o.asn)
+	b = binary.BigEndian.AppendUint16(b, o.hold)
+	b = binary.BigEndian.AppendUint32(b, o.id)
 	return append(b, 0)
 }
 

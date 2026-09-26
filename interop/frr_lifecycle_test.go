@@ -12,19 +12,25 @@ import (
 )
 
 // Scenario 6: lifecycle NOTIFICATIONs in both directions, asserted
-// via our Close on receipt and FRR's neighbor JSON on transmission —
+// via our Close on receipt and FRR's neighbor JSON on transmission,
 // never by log scraping.
 
 // TestFRRShutdownFromFRR applies `neighbor ... shutdown message` on a
 // live session and asserts our Close decodes FRR's Administrative
 // Shutdown and its RFC 9003 communication.
 func TestFRRShutdownFromFRR(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	const farewell = "interop: maintenance"
 
 	f := startFRR(t, frrConfig{
-		ASN:       frrASN,
-		RouterID:  frrRouterID,
-		Neighbors: []frrNeighbor{{Addr: hostAddr4, ASN: libASN}},
+		ASN:      frrASN,
+		RouterID: frrRouterID,
+		Neighbors: []frrNeighbor{{
+			Addr: hostAddr4,
+			ASN:  libASN,
+		}},
 	})
 
 	cfg := bgp.PeerConfig{
@@ -70,12 +76,18 @@ func TestFRRShutdownFromFRR(t *testing.T) {
 // ShutdownCommunication is set and asserts FRR records the
 // Administrative Shutdown and our text.
 func TestFRRShutdownToFRR(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	const farewell = "interop: goodbye"
 
 	f := startFRR(t, frrConfig{
-		ASN:       frrASN,
-		RouterID:  frrRouterID,
-		Neighbors: []frrNeighbor{{Addr: hostAddr4, ASN: libASN}},
+		ASN:      frrASN,
+		RouterID: frrRouterID,
+		Neighbors: []frrNeighbor{{
+			Addr: hostAddr4,
+			ASN:  libASN,
+		}},
 	})
 
 	_, estab, cancel := runPeerCause(t, netip.AddrPortFrom(f.Addr, bgp.Port), bgp.PeerConfig{
@@ -99,9 +111,10 @@ func TestFRRShutdownToFRR(t *testing.T) {
 // FRR sees Cease / Peer De-configured, exactly what a router sends on
 // neighbor removal.
 func TestFRRPeerDeconfigured(t *testing.T) {
-	frrAddr := netip.MustParseAddr(frrV4)
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
 
-	srv, estab, port := runServer(t, netip.AddrPortFrom(frrAddr, 0), bgp.PeerConfig{
+	srv, estab, port := runServer(t, bgp.PeerConfig{
 		LocalASN: libASN,
 		LocalID:  libID,
 		PeerASN:  frrASN,
@@ -110,13 +123,17 @@ func TestFRRPeerDeconfigured(t *testing.T) {
 	}, bgp.ListenConfig{})
 
 	f := startFRR(t, frrConfig{
-		ASN:       frrASN,
-		RouterID:  frrRouterID,
-		Neighbors: []frrNeighbor{{Addr: hostAddr4, ASN: libASN, Port: port}},
+		ASN:      frrASN,
+		RouterID: frrRouterID,
+		Neighbors: []frrNeighbor{{
+			Addr: hostAddr4,
+			ASN:  libASN,
+			Port: port,
+		}},
 	})
 	awaitSession(t, estab)
 
-	if err := srv.RemovePeer(frrAddr, nil); err != nil {
+	if err := srv.RemovePeer(f.Addr, nil); err != nil {
 		t.Fatalf("failed to remove peer: %v", err)
 	}
 
@@ -126,14 +143,20 @@ func TestFRRPeerDeconfigured(t *testing.T) {
 
 // TestFRRHardReset cancels a peer with a NewHardResetError cause and
 // asserts FRR records the RFC 8538 Hard Reset. Both speakers
-// advertise graceful restart with the N bit: RFC 8538's procedures —
-// including FRR's hard-reset bookkeeping — apply to sessions where
+// advertise graceful restart with the N bit: RFC 8538's procedures,
+// FRR's hard-reset bookkeeping included, apply to sessions where
 // notification support was negotiated, not bare ones.
 func TestFRRHardReset(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	f := startFRR(t, frrConfig{
-		ASN:             frrASN,
-		RouterID:        frrRouterID,
-		Neighbors:       []frrNeighbor{{Addr: hostAddr4, ASN: libASN}},
+		ASN:      frrASN,
+		RouterID: frrRouterID,
+		Neighbors: []frrNeighbor{{
+			Addr: hostAddr4,
+			ASN:  libASN,
+		}},
 		GracefulRestart: true,
 	})
 
@@ -166,11 +189,11 @@ func TestFRRHardReset(t *testing.T) {
 	cancel(cause)
 
 	// FRR decapsulates per RFC 8538, section 3: it records the
-	// *inner* NOTIFICATION — Cease (6) / Administrative Reset (4) —
+	// *inner* NOTIFICATION, Cease (6) / Administrative Reset (4),
 	// with the hard-reset marker set, and surfaces the RFC 9003
-	// communication riding inside the encapsulation. (Without the N
+	// communication riding inside the encapsulation. Without the N
 	// bit negotiated, FRR instead records the outer Cease/Hard Reset
-	// verbatim and never sets the marker — observed with 10.7.0.)
+	// verbatim and never sets the marker, as observed with 10.7.0.
 	n := f.awaitNotified(t, hostAddr4, "0604")
 	if !n.LastNotificationHardReset {
 		t.Errorf("FRR did not mark the notification as a hard reset: %+v", n)
@@ -184,10 +207,16 @@ func TestFRRHardReset(t *testing.T) {
 // Scenario 7: the graceful restart negotiation surface, and
 // End-of-RIB delivery after FRR's initial advertisements.
 func TestFRRGracefulRestart(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	f := startFRR(t, frrConfig{
-		ASN:             frrASN,
-		RouterID:        frrRouterID,
-		Neighbors:       []frrNeighbor{{Addr: hostAddr4, ASN: libASN}},
+		ASN:      frrASN,
+		RouterID: frrRouterID,
+		Neighbors: []frrNeighbor{{
+			Addr: hostAddr4,
+			ASN:  libASN,
+		}},
 		NetworksV4:      []netip.Prefix{prefixV4A},
 		NetworksV6:      []netip.Prefix{prefixV6B},
 		GracefulRestart: true,
@@ -253,10 +282,16 @@ func TestFRRGracefulRestart(t *testing.T) {
 // also the unnegotiated regime for real: the session reports it absent, any
 // demarcation FRR sends is dropped, and its re-advertisement arrives plain.
 func TestFRRRouteRefresh(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	f := startFRR(t, frrConfig{
-		ASN:        frrASN,
-		RouterID:   frrRouterID,
-		Neighbors:  []frrNeighbor{{Addr: hostAddr4, ASN: libASN}},
+		ASN:      frrASN,
+		RouterID: frrRouterID,
+		Neighbors: []frrNeighbor{{
+			Addr: hostAddr4,
+			ASN:  libASN,
+		}},
 		NetworksV4: []netip.Prefix{prefixV4A},
 	})
 
@@ -306,17 +341,26 @@ func TestFRRRouteRefresh(t *testing.T) {
 		t.Fatalf("failed to soft clear: %v", err)
 	}
 
-	awaitRefresh(t, refreshes, v4Unicast, bgp.RouteRefreshRequest)
+	awaitRefresh(t, refreshes, bgp.RouteRefresh{
+		Family:  v4Unicast,
+		Subtype: bgp.RouteRefreshRequest,
+	})
 }
 
 // Scenario 11: enhanced route refresh (RFC 7313) negotiated with FRR. FRR
 // brackets its re-advertisement with BoRR and EoRR, delivered in order
 // around the routes, and its own refresh request still arrives plain.
 func TestFRREnhancedRouteRefresh(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	f := startFRR(t, frrConfig{
-		ASN:        frrASN,
-		RouterID:   frrRouterID,
-		Neighbors:  []frrNeighbor{{Addr: hostAddr4, ASN: libASN}},
+		ASN:      frrASN,
+		RouterID: frrRouterID,
+		Neighbors: []frrNeighbor{{
+			Addr: hostAddr4,
+			ASN:  libASN,
+		}},
 		NetworksV4: []netip.Prefix{prefixV4A},
 	})
 
@@ -359,16 +403,25 @@ func TestFRREnhancedRouteRefresh(t *testing.T) {
 		t.Fatalf("failed to send route refresh: %v", err)
 	}
 
-	awaitRefresh(t, refreshes, v4Unicast, bgp.RouteRefreshBegin)
+	awaitRefresh(t, refreshes, bgp.RouteRefresh{
+		Family:  v4Unicast,
+		Subtype: bgp.RouteRefreshBegin,
+	})
 	awaitRoute(t, routes, prefixV4A)
-	awaitRefresh(t, refreshes, v4Unicast, bgp.RouteRefreshEnd)
+	awaitRefresh(t, refreshes, bgp.RouteRefresh{
+		Family:  v4Unicast,
+		Subtype: bgp.RouteRefreshEnd,
+	})
 
 	// The reverse: a soft clear makes FRR request a refresh from us.
 	if err := f.vtysh(t, "clear bgp ipv4 unicast * soft in", nil); err != nil {
 		t.Fatalf("failed to soft clear: %v", err)
 	}
 
-	awaitRefresh(t, refreshes, v4Unicast, bgp.RouteRefreshRequest)
+	awaitRefresh(t, refreshes, bgp.RouteRefresh{
+		Family:  v4Unicast,
+		Subtype: bgp.RouteRefreshRequest,
+	})
 }
 
 // collectCloses installs an OnClose hook in cfg, delivering each
@@ -405,35 +458,18 @@ func awaitClose(t *testing.T, closes <-chan bgp.Close) bgp.Close {
 	}
 }
 
-// awaitNotified polls until FRR records a last NOTIFICATION with the
-// given four-hex-digit code/subcode (e.g. "0602" for Cease /
-// Administrative Shutdown) for the neighbor at addr, and returns that
-// view.
-func (f *frr) awaitNotified(t *testing.T, addr netip.Addr, codeSubcode string) frrNeighborJSON {
-	t.Helper()
-
-	var n frrNeighborJSON
-	f.poll(t, "neighbor "+addr.String()+" never recorded notification "+codeSubcode, func() bool {
-		var err error
-		n, err = f.neighbor(t, addr)
-		return err == nil && n.LastErrorCodeSubcode == codeSubcode
-	})
-
-	return n
-}
-
-// awaitRefresh waits for the next ROUTE-REFRESH FRR sent and asserts its
-// family and subtype.
-func awaitRefresh(t *testing.T, refreshes <-chan bgp.RouteRefresh, fam bgp.Family, want bgp.RouteRefreshSubtype) {
+// awaitRefresh waits for the next ROUTE-REFRESH FRR sent and asserts it
+// matches want's family and subtype.
+func awaitRefresh(t *testing.T, refreshes <-chan bgp.RouteRefresh, want bgp.RouteRefresh) {
 	t.Helper()
 
 	select {
 	case r := <-refreshes:
-		if r.Subtype != want || r.Family != fam {
-			t.Fatalf("unexpected ROUTE-REFRESH: got %s %v, want %s %v", r.Subtype, r.Family, want, fam)
+		if r != want {
+			t.Fatalf("unexpected ROUTE-REFRESH: got %s %v, want %s %v", r.Subtype, r.Family, want.Subtype, want.Family)
 		}
 	case <-time.After(settleTimeout):
-		t.Fatalf("timed out waiting for FRR's %s %v", want, fam)
+		t.Fatalf("timed out waiting for FRR's %s %v", want.Subtype, want.Family)
 	}
 }
 
@@ -445,6 +481,9 @@ func awaitFRRRefreshRequests(t *testing.T, refreshes <-chan bgp.RouteRefresh) {
 	t.Helper()
 
 	for _, fam := range families {
-		awaitRefresh(t, refreshes, fam, bgp.RouteRefreshRequest)
+		awaitRefresh(t, refreshes, bgp.RouteRefresh{
+			Family:  fam,
+			Subtype: bgp.RouteRefreshRequest,
+		})
 	}
 }

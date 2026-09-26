@@ -9,7 +9,7 @@ import (
 	"math"
 	"net"
 	"net/netip"
-	"slices"
+	"sync"
 	"testing"
 	"time"
 )
@@ -24,7 +24,10 @@ func FuzzParseMessage(f *testing.F) {
 			HoldTime: 90 * time.Second,
 			ID:       MustParseIdentifier("192.0.2.1"),
 			Capabilities: []Capability{
-				MultiprotocolCapability(Family{AFI: AFIIPv6, SAFI: SAFIUnicast}),
+				MultiprotocolCapability(Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				}),
 			},
 		},
 		&Update{
@@ -32,10 +35,31 @@ func FuzzParseMessage(f *testing.F) {
 			Attributes: mustAttributes(f, OriginIGP, ASPath{{ASNs: []uint32{64496}}}),
 			NLRI:       []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
 		},
-		&Notification{Code: NotificationCease, Subcode: 2, Data: []byte{0x01}},
-		&RouteRefresh{Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast}},
-		&RouteRefresh{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, Subtype: RouteRefreshBegin},
-		&RouteRefresh{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, Subtype: RouteRefreshEnd},
+		&Notification{
+			Code:    NotificationCease,
+			Subcode: 2,
+			Data:    []byte{0x01},
+		},
+		&RouteRefresh{
+			Family: Family{
+				AFI:  AFIIPv6,
+				SAFI: SAFIUnicast,
+			},
+		},
+		&RouteRefresh{
+			Family: Family{
+				AFI:  AFIIPv4,
+				SAFI: SAFIUnicast,
+			},
+			Subtype: RouteRefreshBegin,
+		},
+		&RouteRefresh{
+			Family: Family{
+				AFI:  AFIIPv4,
+				SAFI: SAFIUnicast,
+			},
+			Subtype: RouteRefreshEnd,
+		},
 	}
 
 	for _, m := range seeds {
@@ -89,8 +113,8 @@ func FuzzParseMessage(f *testing.F) {
 
 		// A treat-as-withdraw UPDATE carries an error whose NOTIFICATION
 		// must marshal like any other.
-		if d := r.Diagnostics; d != nil && d.Malformed != nil {
-			if _, err := d.Malformed.Notification().AppendBinary(nil); err != nil {
+		if r.Diagnostics != nil && r.Diagnostics.Malformed != nil {
+			if _, err := r.Diagnostics.Malformed.Notification().AppendBinary(nil); err != nil {
 				t.Fatalf("failed to marshal Malformed NOTIFICATION: %v", err)
 			}
 		}
@@ -127,8 +151,8 @@ func FuzzParseMessage(f *testing.F) {
 			t.Fatalf("failed to re-marshal message: %v", err)
 		}
 
-		if !bytes.Equal(b1, b2) {
-			t.Fatalf("marshaling is not idempotent:\n b1: %x\n b2: %x", b1, b2)
+		if d := diff(t, b1, b2); d != "" {
+			t.Fatalf("marshaling is not idempotent (-b1 +b2):\n%s", d)
 		}
 	})
 }
@@ -139,12 +163,21 @@ func FuzzParseMessage(f *testing.F) {
 // attribute marking run against arbitrary bytes.
 func FuzzParseMessageAddPath(f *testing.F) {
 	addPath := []Family{
-		{AFI: AFIIPv4, SAFI: SAFIUnicast},
-		{AFI: AFIIPv6, SAFI: SAFIUnicast},
+		{
+			AFI:  AFIIPv4,
+			SAFI: SAFIUnicast,
+		},
+		{
+			AFI:  AFIIPv6,
+			SAFI: SAFIUnicast,
+		},
 	}
 
 	apCap, err := AddPathCapability(AddPathFamily{
-		Family:  Family{AFI: AFIIPv4, SAFI: SAFIUnicast},
+		Family: Family{
+			AFI:  AFIIPv4,
+			SAFI: SAFIUnicast,
+		},
 		Send:    true,
 		Receive: true,
 	})
@@ -158,28 +191,49 @@ func FuzzParseMessageAddPath(f *testing.F) {
 	seeds := []Message{
 		&Update{
 			WithdrawnPaths: PathPrefixes{
-				{ID: 1, Prefix: netip.MustParsePrefix("198.51.100.0/24")},
+				{
+					ID:     1,
+					Prefix: netip.MustParsePrefix("198.51.100.0/24"),
+				},
 			},
 			Attributes: mustAttributes(f, OriginIGP, ASPath{{ASNs: []uint32{64496}}}),
 			NLRIPaths: PathPrefixes{
-				{ID: 1, Prefix: netip.MustParsePrefix("203.0.113.0/24")},
-				{ID: 2, Prefix: netip.MustParsePrefix("203.0.113.0/24")},
+				{
+					ID:     1,
+					Prefix: netip.MustParsePrefix("203.0.113.0/24"),
+				},
+				{
+					ID:     2,
+					Prefix: netip.MustParsePrefix("203.0.113.0/24"),
+				},
 			},
 		},
 		&Update{
 			Attributes: mustAttributes(f, MPReachNLRI{
-				Family:  Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				},
 				NextHop: netip.MustParseAddr("2001:db8::1"),
 				NLRI: PathPrefixes{
-					{ID: 7, Prefix: netip.MustParsePrefix("2001:db8::/32")},
+					{
+						ID:     7,
+						Prefix: netip.MustParsePrefix("2001:db8::/32"),
+					},
 				},
 			}),
 		},
 		&Update{
 			Attributes: mustAttributes(f, MPUnreachNLRI{
-				Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				},
 				NLRI: PathPrefixes{
-					{ID: 0, Prefix: netip.MustParsePrefix("2001:db8::/32")},
+					{
+						ID:     0,
+						Prefix: netip.MustParsePrefix("2001:db8::/32"),
+					},
 				},
 			}),
 		},
@@ -273,8 +327,8 @@ func FuzzParseMessageAddPath(f *testing.F) {
 			t.Fatalf("failed to re-marshal message: %v", err)
 		}
 
-		if !bytes.Equal(b1, b2) {
-			t.Fatalf("marshaling is not idempotent:\n b1: %x\n b2: %x", b1, b2)
+		if d := diff(t, b1, b2); d != "" {
+			t.Fatalf("marshaling is not idempotent (-b1 +b2):\n%s", d)
 		}
 	})
 }
@@ -289,7 +343,10 @@ func FuzzReadMessage(f *testing.F) {
 			HoldTime: 90 * time.Second,
 			ID:       MustParseIdentifier("192.0.2.1"),
 			Capabilities: []Capability{
-				MultiprotocolCapability(Family{AFI: AFIIPv4, SAFI: SAFIUnicast}),
+				MultiprotocolCapability(Family{
+					AFI:  AFIIPv4,
+					SAFI: SAFIUnicast,
+				}),
 			},
 		},
 		&Update{
@@ -297,10 +354,31 @@ func FuzzReadMessage(f *testing.F) {
 			Attributes: mustAttributes(f, OriginIGP, ASPath{{ASNs: []uint32{64496}}}),
 			NLRI:       []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
 		},
-		&Notification{Code: NotificationCease, Subcode: 2, Data: []byte{0x01}},
-		&RouteRefresh{Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast}},
-		&RouteRefresh{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, Subtype: RouteRefreshBegin},
-		&RouteRefresh{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, Subtype: RouteRefreshEnd},
+		&Notification{
+			Code:    NotificationCease,
+			Subcode: 2,
+			Data:    []byte{0x01},
+		},
+		&RouteRefresh{
+			Family: Family{
+				AFI:  AFIIPv6,
+				SAFI: SAFIUnicast,
+			},
+		},
+		&RouteRefresh{
+			Family: Family{
+				AFI:  AFIIPv4,
+				SAFI: SAFIUnicast,
+			},
+			Subtype: RouteRefreshBegin,
+		},
+		&RouteRefresh{
+			Family: Family{
+				AFI:  AFIIPv4,
+				SAFI: SAFIUnicast,
+			},
+			Subtype: RouteRefreshEnd,
+		},
 	}
 
 	var all []byte
@@ -330,8 +408,15 @@ func FuzzReadMessage(f *testing.F) {
 		// for long enough to be misreported as a hang. Kernel buffering
 		// behavior is covered by the Conn tests instead.
 		peer, c := net.Pipe()
-		defer func() { _ = peer.Close() }()
-		defer func() { _ = c.Close() }()
+
+		// Closing both ends unblocks a writer the reader stopped short of,
+		// so the join cannot hang on any exit from the iteration.
+		var wg sync.WaitGroup
+		defer func() {
+			_ = c.Close()
+			_ = peer.Close()
+			wg.Wait()
+		}()
 
 		// Both sides are bounded so a pathological input cannot stall an
 		// iteration.
@@ -340,14 +425,12 @@ func FuzzReadMessage(f *testing.F) {
 			t.Fatalf("failed to set peer deadline: %v", err)
 		}
 
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
+		wg.Go(func() {
 			// Errors are irrelevant: the reader may stop at any point.
 			// Closing the write side delivers EOF to the reader.
 			_, _ = peer.Write(b)
 			_ = peer.Close()
-		}()
+		})
 
 		conn := NewConn(c)
 		if err := conn.SetReadDeadline(deadline); err != nil {
@@ -372,11 +455,6 @@ func FuzzReadMessage(f *testing.F) {
 				continue
 			}
 		}
-
-		// The reader may stop mid-stream, leaving the writer blocked on the
-		// unbuffered pipe; closing the read side unblocks it.
-		_ = c.Close()
-		<-done
 	})
 }
 
@@ -385,31 +463,62 @@ func FuzzRawAttributeParse(f *testing.F) {
 	// real attributes from the route collector corpus.
 	seeds := []Attribute{
 		OriginIGP,
-		ASPath{{ASNs: []uint32{64496, 65536}}, {Set: true, ASNs: []uint32{64497}}},
 		ASPath{
-			{Confed: true, ASNs: []uint32{65001, 65003}},
-			{Set: true, Confed: true, ASNs: []uint32{65004}},
+			{ASNs: []uint32{64496, 65536}},
+			{
+				Set:  true,
+				ASNs: []uint32{64497},
+			},
+		},
+		ASPath{
+			{
+				Confed: true,
+				ASNs:   []uint32{65001, 65003},
+			},
+			{
+				Set:    true,
+				Confed: true,
+				ASNs:   []uint32{65004},
+			},
 			{ASNs: []uint32{64496}},
 		},
 		NextHop(netip.MustParseAddr("192.0.2.1")),
 		MED(100),
 		LocalPref(200),
 		AtomicAggregate{},
-		Aggregator{ASN: 64496, ID: MustParseIdentifier("192.0.2.1")},
+		Aggregator{
+			ASN: 64496,
+			ID:  MustParseIdentifier("192.0.2.1"),
+		},
 		Communities{NewCommunity(64496, 100)},
 		OriginatorID(MustParseIdentifier("192.0.2.1")),
 		ClusterList{MustParseIdentifier("192.0.2.2")},
 		ExtendedCommunities{{0x00, 0x02, 0xfb, 0xf0, 0x00, 0x00, 0x00, 0x64}},
-		LargeCommunities{{Global: 65536, Local1: 1, Local2: 2}},
+		LargeCommunities{{
+			Global: 65536,
+			Local1: 1,
+			Local2: 2,
+		}},
 		OTC(64496),
 		MPReachNLRI{
-			Family:  Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+			Family: Family{
+				AFI:  AFIIPv6,
+				SAFI: SAFIUnicast,
+			},
 			NextHop: netip.MustParseAddr("2001:db8::1"),
 			NLRI:    Prefixes{netip.MustParsePrefix("2001:db8::/32")},
 		},
-		MPUnreachNLRI{Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast}},
+		MPUnreachNLRI{
+			Family: Family{
+				AFI:  AFIIPv6,
+				SAFI: SAFIUnicast,
+			},
+		},
 		MPReachNLRI{
-			Family:  Family{AFI: AFIL2VPN, SAFI: SAFIEVPN},
+			Family: Family{
+				AFI:  AFIL2VPN,
+				SAFI: SAFIEVPN,
+			},
 			NextHop: netip.MustParseAddr("192.0.2.1"),
 			NLRI: EVPNRoutes{{
 				Type:  EVPNRouteEthernetSegment,
@@ -417,7 +526,10 @@ func FuzzRawAttributeParse(f *testing.F) {
 			}},
 		},
 		MPReachNLRI{
-			Family:  Family{AFI: AFILinkState, SAFI: SAFILinkState},
+			Family: Family{
+				AFI:  AFILinkState,
+				SAFI: SAFILinkState,
+			},
 			NextHop: netip.MustParseAddr("192.0.2.1"),
 			NLRI: LinkStateRoutes{{
 				Type:  LinkStateRouteNode,
@@ -425,11 +537,17 @@ func FuzzRawAttributeParse(f *testing.F) {
 			}},
 		},
 		MPUnreachNLRI{
-			Family: Family{AFI: AFIL2VPN, SAFI: SAFIVPLS},
-			NLRI:   RawNLRI{0x00, 0x03, 0xde, 0xad, 0xbe},
+			Family: Family{
+				AFI:  AFIL2VPN,
+				SAFI: SAFIVPLS,
+			},
+			NLRI: RawNLRI{0x00, 0x03, 0xde, 0xad, 0xbe},
 		},
 		MPReachNLRI{
-			Family:  Family{AFI: AFIIPv4, SAFI: SAFIMPLSVPN},
+			Family: Family{
+				AFI:  AFIIPv4,
+				SAFI: SAFIMPLSVPN,
+			},
 			NextHop: netip.MustParseAddr("192.0.2.1"),
 			NLRI:    RawNLRI{112, 0x00, 0x01, 0x31, 0x00, 0x00, 0xfb, 0xf0, 0x00, 0x00, 0x00, 0x01, 192, 0, 2},
 		},
@@ -450,9 +568,11 @@ func FuzzRawAttributeParse(f *testing.F) {
 			f.Fatalf("failed to parse corpus message: %v", err)
 		}
 
+		// The fuzz body scrambles its input in place, and a.Data references
+		// the shared corpus, so each seed is a copy.
 		if u, ok := r.Message.(*Update); ok {
 			for _, a := range u.Attributes {
-				f.Add(uint8(a.Flags), uint8(a.Type), a.Data)
+				f.Add(uint8(a.Flags), uint8(a.Type), bytes.Clone(a.Data))
 			}
 		}
 	}
@@ -461,11 +581,15 @@ func FuzzRawAttributeParse(f *testing.F) {
 	// types the updates corpus lacks, plus RFC 6396's truncated
 	// MP_REACH_NLRI form.
 	for _, a := range ribSeeds(f) {
-		f.Add(uint8(a.Flags), uint8(a.Type), a.Data)
+		f.Add(uint8(a.Flags), uint8(a.Type), bytes.Clone(a.Data))
 	}
 
 	f.Fuzz(func(t *testing.T, flags, typ uint8, data []byte) {
-		a := RawAttribute{Flags: AttrFlags(flags), Type: AttrType(typ), Data: data}
+		a := RawAttribute{
+			Flags: AttrFlags(flags),
+			Type:  AttrType(typ),
+			Data:  data,
+		}
 
 		attr, err := a.Parse()
 		if err != nil {
@@ -529,12 +653,18 @@ func FuzzRawAttributeParse(f *testing.F) {
 func FuzzCapabilityParse(f *testing.F) {
 	apCap, err := AddPathCapability(
 		AddPathFamily{
-			Family:  Family{AFI: AFIIPv4, SAFI: SAFIUnicast},
+			Family: Family{
+				AFI:  AFIIPv4,
+				SAFI: SAFIUnicast,
+			},
 			Send:    true,
 			Receive: true,
 		},
 		AddPathFamily{
-			Family:  Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+			Family: Family{
+				AFI:  AFIIPv6,
+				SAFI: SAFIUnicast,
+			},
 			Receive: true,
 		},
 	)
@@ -547,7 +677,13 @@ func FuzzCapabilityParse(f *testing.F) {
 		NotificationSupport: true,
 		RestartTime:         120 * time.Second,
 		Families: []GracefulRestartFamily{
-			{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, ForwardingPreserved: true},
+			{
+				Family: Family{
+					AFI:  AFIIPv4,
+					SAFI: SAFIUnicast,
+				},
+				ForwardingPreserved: true,
+			},
 		},
 	})
 	if err != nil {
@@ -556,7 +692,14 @@ func FuzzCapabilityParse(f *testing.F) {
 
 	llgrCap, err := LongLivedGracefulRestartCapability(LongLivedGracefulRestart{
 		Families: []LongLivedGracefulRestartFamily{
-			{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, ForwardingPreserved: true, StaleTime: time.Hour},
+			{
+				Family: Family{
+					AFI:  AFIIPv4,
+					SAFI: SAFIUnicast,
+				},
+				ForwardingPreserved: true,
+				StaleTime:           time.Hour,
+			},
 		},
 	})
 	if err != nil {
@@ -571,14 +714,23 @@ func FuzzCapabilityParse(f *testing.F) {
 	// Seed with a canonical encoding of every decodable capability, so
 	// each dispatch arm starts from valid bytes, plus a truncated one.
 	seeds := []Capability{
-		MultiprotocolCapability(Family{AFI: AFIIPv6, SAFI: SAFIUnicast}),
-		ExtendedNextHopCapability(Family{AFI: AFIIPv4, SAFI: SAFIUnicast}),
+		MultiprotocolCapability(Family{
+			AFI:  AFIIPv6,
+			SAFI: SAFIUnicast,
+		}),
+		ExtendedNextHopCapability(Family{
+			AFI:  AFIIPv4,
+			SAFI: SAFIUnicast,
+		}),
 		grCap,
 		llgrCap,
 		apCap,
 		fqdnCap,
 		{Code: CapabilityRouteRefresh},
-		{Code: CapabilityAddPath, Data: apCap.Data[:3]},
+		{
+			Code: CapabilityAddPath,
+			Data: apCap.Data[:3],
+		},
 	}
 
 	for _, c := range seeds {
@@ -586,7 +738,10 @@ func FuzzCapabilityParse(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, code uint8, data []byte) {
-		c := Capability{Code: CapabilityCode(code), Data: data}
+		c := Capability{
+			Code: CapabilityCode(code),
+			Data: data,
+		}
 
 		switch c.Code {
 		case CapabilityMultiprotocol:
@@ -600,8 +755,8 @@ func FuzzCapabilityParse(f *testing.F) {
 				t.Fatalf("failed to re-parse multiprotocol capability: %v", err)
 			}
 
-			if v != v2 {
-				t.Fatalf("multiprotocol capability did not round trip: %v != %v", v, v2)
+			if d := diff(t, v, v2); d != "" {
+				t.Fatalf("multiprotocol capability did not round trip (-want +got):\n%s", d)
 			}
 		case CapabilityExtendedNextHop:
 			fs, err := c.ExtendedNextHop()
@@ -614,8 +769,8 @@ func FuzzCapabilityParse(f *testing.F) {
 				t.Fatalf("failed to re-parse extended next hop capability: %v", err)
 			}
 
-			if !slices.Equal(fs, fs2) {
-				t.Fatalf("extended next hop capability did not round trip:\n first: %+v\nsecond: %+v", fs, fs2)
+			if d := diff(t, fs, fs2); d != "" {
+				t.Fatalf("extended next hop capability did not round trip (-want +got):\n%s", d)
 			}
 		case CapabilityGracefulRestart:
 			gr, err := c.GracefulRestart()
@@ -671,8 +826,8 @@ func FuzzCapabilityParse(f *testing.F) {
 				t.Fatalf("failed to re-parse add-path capability: %v", err)
 			}
 
-			if !slices.Equal(fs, fs2) {
-				t.Fatalf("add-path capability did not round trip:\n first: %+v\nsecond: %+v", fs, fs2)
+			if d := diff(t, fs, fs2); d != "" {
+				t.Fatalf("add-path capability did not round trip (-want +got):\n%s", d)
 			}
 		case CapabilityFQDN:
 			hostname, domain, err := c.FQDN()

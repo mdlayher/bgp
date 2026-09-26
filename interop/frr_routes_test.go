@@ -27,10 +27,16 @@ var (
 // TestFRRRoutesLibraryToFRR announces IPv4 prefixes via SendUpdate
 // and asserts they land in FRR's table with our attributes intact.
 func TestFRRRoutesLibraryToFRR(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	f := startFRR(t, frrConfig{
-		ASN:       frrASN,
-		RouterID:  frrRouterID,
-		Neighbors: []frrNeighbor{{Addr: hostAddr4, ASN: libASN}},
+		ASN:      frrASN,
+		RouterID: frrRouterID,
+		Neighbors: []frrNeighbor{{
+			Addr: hostAddr4,
+			ASN:  libASN,
+		}},
 	})
 
 	p, estab := runPeer(t, netip.AddrPortFrom(f.Addr, bgp.Port), bgp.PeerConfig{
@@ -83,10 +89,16 @@ func TestFRRRoutesLibraryToFRR(t *testing.T) {
 // network statement and asserts OnUpdate delivers it with FRR's
 // attributes typed-parsed.
 func TestFRRRoutesFRRToLibrary(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	f := startFRR(t, frrConfig{
-		ASN:        frrASN,
-		RouterID:   frrRouterID,
-		Neighbors:  []frrNeighbor{{Addr: hostAddr4, ASN: libASN}},
+		ASN:      frrASN,
+		RouterID: frrRouterID,
+		Neighbors: []frrNeighbor{{
+			Addr: hostAddr4,
+			ASN:  libASN,
+		}},
 		NetworksV4: []netip.Prefix{prefixV4A},
 	})
 
@@ -105,8 +117,8 @@ func TestFRRRoutesFRRToLibrary(t *testing.T) {
 		t.Errorf("unexpected origin: got %s, want %s", got, want)
 	}
 
-	if got, want := r.ASPath, []uint32{frrASN}; !slices.Equal(got, want) {
-		t.Errorf("unexpected AS path: got %v, want %v", got, want)
+	if d := diff(t, []uint32{frrASN}, r.ASPath); d != "" {
+		t.Errorf("unexpected AS path (-want +got):\n%s", d)
 	}
 
 	if got, want := r.NextHop, f.Addr; got != want {
@@ -114,21 +126,30 @@ func TestFRRRoutesFRRToLibrary(t *testing.T) {
 	}
 }
 
-// TestFRRReadvertise is the flagship loop: library speaker A (AS
-// 64496, IPv4 session) announces a prefix to FRR, which re-advertises
-// it to library speaker B (AS 64498, IPv6 session — the two speakers
+// TestFRRReadvertise is the flagship loop: library speaker A, AS 64496
+// on an IPv4 session, announces a prefix to FRR, which re-advertises it
+// to library speaker B, AS 64498 on an IPv6 session. The two speakers
 // share the host's addresses, so they must peer over different
-// families for FRR to tell them apart). B must parse FRR-authored
+// families for FRR to tell them apart. B must parse FRR-authored
 // attributes: its AS_PATH prepend and its next hop rewrite.
 func TestFRRReadvertise(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	const libASNB uint32 = 64498
 
 	f := startFRR(t, frrConfig{
 		ASN:      frrASN,
 		RouterID: frrRouterID,
 		Neighbors: []frrNeighbor{
-			{Addr: hostAddr4, ASN: libASN},
-			{Addr: hostAddr6, ASN: libASNB},
+			{
+				Addr: hostAddr4,
+				ASN:  libASN,
+			},
+			{
+				Addr: hostAddr6,
+				ASN:  libASNB,
+			},
 		},
 	})
 
@@ -171,8 +192,8 @@ func TestFRRReadvertise(t *testing.T) {
 	}
 
 	r := awaitRoute(t, routes, prefixV4A)
-	if got, want := r.ASPath, []uint32{frrASN, libASN}; !slices.Equal(got, want) {
-		t.Errorf("unexpected AS path: got %v, want %v", got, want)
+	if d := diff(t, []uint32{frrASN, libASN}, r.ASPath); d != "" {
+		t.Errorf("unexpected AS path (-want +got):\n%s", d)
 	}
 
 	// FRR rewrites the next hop to its own address on the session to
@@ -193,10 +214,16 @@ func TestFRRReadvertise(t *testing.T) {
 // an IPv6 session, asserting FRR's RFC 2545 dual next hop form on
 // receipt.
 func TestFRRRoutesIPv6(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	f := startFRR(t, frrConfig{
-		ASN:        frrASN,
-		RouterID:   frrRouterID,
-		Neighbors:  []frrNeighbor{{Addr: hostAddr6, ASN: libASN}},
+		ASN:      frrASN,
+		RouterID: frrRouterID,
+		Neighbors: []frrNeighbor{{
+			Addr: hostAddr6,
+			ASN:  libASN,
+		}},
 		NetworksV6: []netip.Prefix{prefixV6B},
 	})
 
@@ -225,8 +252,8 @@ func TestFRRRoutesIPv6(t *testing.T) {
 		t.Errorf("expected an RFC 2545 link-local next hop, got %s", r.LinkLocal)
 	}
 
-	if got, want := r.ASPath, []uint32{frrASN}; !slices.Equal(got, want) {
-		t.Errorf("unexpected AS path: got %v, want %v", got, want)
+	if d := diff(t, []uint32{frrASN}, r.ASPath); d != "" {
+		t.Errorf("unexpected AS path (-want +got):\n%s", d)
 	}
 
 	// Us to FRR.
@@ -262,10 +289,17 @@ func TestFRRRoutesIPv6(t *testing.T) {
 // TestFRRExtendedNextHop negotiates RFC 8950 on an IPv6 session and
 // exchanges IPv4 NLRI with IPv6 next hops in both directions.
 func TestFRRExtendedNextHop(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	f := startFRR(t, frrConfig{
-		ASN:        frrASN,
-		RouterID:   frrRouterID,
-		Neighbors:  []frrNeighbor{{Addr: hostAddr6, ASN: libASN, ExtendedNexthop: true}},
+		ASN:      frrASN,
+		RouterID: frrRouterID,
+		Neighbors: []frrNeighbor{{
+			Addr:            hostAddr6,
+			ASN:             libASN,
+			ExtendedNexthop: true,
+		}},
 		NetworksV4: []netip.Prefix{prefixV4A},
 	})
 

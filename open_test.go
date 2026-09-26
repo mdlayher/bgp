@@ -12,13 +12,11 @@ func TestOpenAppendBinaryWire(t *testing.T) {
 
 	// An ASN which does not fit 2 bytes is sent as AS_TRANS, and conveyed in
 	// full by the always-generated Four-Octet AS Number capability.
-	o := &Open{
+	b, err := (&Open{
 		ASN:      65536,
 		HoldTime: 90 * time.Second,
 		ID:       MustParseIdentifier("192.0.2.1"),
-	}
-
-	b, err := o.AppendBinary(nil)
+	}).AppendBinary(nil)
 	if err != nil {
 		t.Fatalf("failed to marshal OPEN: %v", err)
 	}
@@ -32,6 +30,7 @@ func TestOpenAppendBinaryWire(t *testing.T) {
 		0x02, 0x06, // capabilities parameter
 		0x41, 0x04, 0x00, 0x01, 0x00, 0x00, // Four-Octet AS Number
 	})
+
 	if d := diff(t, want, b); d != "" {
 		t.Fatalf("unexpected OPEN bytes (-want +got):\n%s", d)
 	}
@@ -117,15 +116,27 @@ func TestOpenAppendBinaryErrors(t *testing.T) {
 	}{
 		{
 			name: "hold time 1s",
-			o:    &Open{ASN: 64496, HoldTime: 1 * time.Second, ID: MustParseIdentifier("192.0.2.1")},
+			o: &Open{
+				ASN:      64496,
+				HoldTime: 1 * time.Second,
+				ID:       MustParseIdentifier("192.0.2.1"),
+			},
 		},
 		{
 			name: "hold time 2s",
-			o:    &Open{ASN: 64496, HoldTime: 2 * time.Second, ID: MustParseIdentifier("192.0.2.1")},
+			o: &Open{
+				ASN:      64496,
+				HoldTime: 2 * time.Second,
+				ID:       MustParseIdentifier("192.0.2.1"),
+			},
 		},
 		{
 			name: "hold time too large",
-			o:    &Open{ASN: 64496, HoldTime: 20 * time.Hour, ID: MustParseIdentifier("192.0.2.1")},
+			o: &Open{
+				ASN:      64496,
+				HoldTime: 20 * time.Hour,
+				ID:       MustParseIdentifier("192.0.2.1"),
+			},
 		},
 		{
 			name: "ID zero",
@@ -137,7 +148,10 @@ func TestOpenAppendBinaryErrors(t *testing.T) {
 				ASN: 64496,
 				ID:  MustParseIdentifier("192.0.2.1"),
 				Capabilities: []Capability{
-					{Code: CapabilityFourOctetAS, Data: []byte{0, 0, 0xfb, 0xf0}},
+					{
+						Code: CapabilityFourOctetAS,
+						Data: []byte{0, 0, 0xfb, 0xf0},
+					},
 				},
 			},
 		},
@@ -147,7 +161,10 @@ func TestOpenAppendBinaryErrors(t *testing.T) {
 				ASN: 64496,
 				ID:  MustParseIdentifier("192.0.2.1"),
 				Capabilities: []Capability{
-					{Code: CapabilityRouteRefresh, Data: make([]byte, 256)},
+					{
+						Code: CapabilityRouteRefresh,
+						Data: make([]byte, 256),
+					},
 				},
 			},
 		},
@@ -157,8 +174,14 @@ func TestOpenAppendBinaryErrors(t *testing.T) {
 				ASN: 64496,
 				ID:  MustParseIdentifier("192.0.2.1"),
 				Capabilities: []Capability{
-					{Code: CapabilityRouteRefresh, Data: make([]byte, 125)},
-					{Code: CapabilityRouteRefresh, Data: make([]byte, 125)},
+					{
+						Code: CapabilityRouteRefresh,
+						Data: make([]byte, 125),
+					},
+					{
+						Code: CapabilityRouteRefresh,
+						Data: make([]byte, 125),
+					},
 				},
 			},
 		},
@@ -173,7 +196,10 @@ func TestOpenAppendBinaryErrors(t *testing.T) {
 				ASN: 64496,
 				ID:  MustParseIdentifier("192.0.2.1"),
 				Capabilities: []Capability{
-					{Code: CapabilityFQDN, Data: make([]byte, 246)},
+					{
+						Code: CapabilityFQDN,
+						Data: make([]byte, 246),
+					},
 				},
 			},
 		},
@@ -202,15 +228,16 @@ func TestOpenCapabilitiesMax(t *testing.T) {
 	// and this capability's header 2 more, so 245 bytes of data lands the
 	// parameter contents at exactly 253: an optional parameters length of
 	// 255.
-	o := &Open{
+	b, err := (&Open{
 		ASN: 64496,
 		ID:  MustParseIdentifier("192.0.2.1"),
 		Capabilities: []Capability{
-			{Code: CapabilityFQDN, Data: make([]byte, 245)},
+			{
+				Code: CapabilityFQDN,
+				Data: make([]byte, 245),
+			},
 		},
-	}
-
-	b, err := o.AppendBinary(nil)
+	}).AppendBinary(nil)
 	if err != nil {
 		t.Fatalf("failed to marshal OPEN: %v", err)
 	}
@@ -355,7 +382,11 @@ func TestParseOpenErrors(t *testing.T) {
 				t.Fatalf("expected nil Message, but got: %v", r.Message)
 			}
 
-			wantMessageError(t, err, tt.code, tt.subcode, tt.data)
+			wantMessageError(t, err, &Notification{
+				Code:    tt.code,
+				Subcode: tt.subcode,
+				Data:    tt.data,
+			})
 		})
 	}
 }
@@ -363,7 +394,11 @@ func TestParseOpenErrors(t *testing.T) {
 func TestCapabilityMultiprotocolRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	want := Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+	want := Family{
+		AFI:  AFIIPv6,
+		SAFI: SAFIUnicast,
+	}
+
 	got, err := MultiprotocolCapability(want).Multiprotocol()
 	if err != nil {
 		t.Fatalf("failed to parse multiprotocol capability: %v", err)
@@ -387,7 +422,10 @@ func TestCapabilityMultiprotocolErrors(t *testing.T) {
 		},
 		{
 			name: "bad length",
-			c:    Capability{Code: CapabilityMultiprotocol, Data: []byte{0x00, 0x02}},
+			c: Capability{
+				Code: CapabilityMultiprotocol,
+				Data: []byte{0x00, 0x02},
+			},
 		},
 	}
 
@@ -408,8 +446,14 @@ func TestExtendedNextHopCapability(t *testing.T) {
 	// RFC 8950, section 3: each entry is NLRI AFI, NLRI SAFI, and next hop
 	// AFI, all as 2 byte values.
 	c := ExtendedNextHopCapability(
-		Family{AFI: AFIIPv4, SAFI: SAFIUnicast},
-		Family{AFI: AFIIPv4, SAFI: SAFIMulticast},
+		Family{
+			AFI:  AFIIPv4,
+			SAFI: SAFIUnicast,
+		},
+		Family{
+			AFI:  AFIIPv4,
+			SAFI: SAFIMulticast,
+		},
 	)
 
 	want := Capability{
@@ -458,8 +502,17 @@ func TestGracefulRestartCapability(t *testing.T) {
 		NotificationSupport: true,
 		RestartTime:         maxRestartTime,
 		Families: []GracefulRestartFamily{
-			{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, ForwardingPreserved: true},
-			{Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast}},
+			{
+				Family: Family{
+					AFI:  AFIIPv4,
+					SAFI: SAFIUnicast,
+				},
+				ForwardingPreserved: true,
+			},
+			{Family: Family{
+				AFI:  AFIIPv6,
+				SAFI: SAFIUnicast,
+			}},
 		},
 	}
 
@@ -511,9 +564,18 @@ func TestGracefulRestartCapabilityErrors(t *testing.T) {
 	// The decoder rejects other capabilities and malformed data: too short
 	// for the header, or a truncated family entry.
 	caps := []Capability{
-		MultiprotocolCapability(Family{AFI: AFIIPv4, SAFI: SAFIUnicast}),
-		{Code: CapabilityGracefulRestart, Data: []byte{0x00}},
-		{Code: CapabilityGracefulRestart, Data: []byte{0x00, 0x00, 0x00, 0x01, 0x01}},
+		MultiprotocolCapability(Family{
+			AFI:  AFIIPv4,
+			SAFI: SAFIUnicast,
+		}),
+		{
+			Code: CapabilityGracefulRestart,
+			Data: []byte{0x00},
+		},
+		{
+			Code: CapabilityGracefulRestart,
+			Data: []byte{0x00, 0x00, 0x00, 0x01, 0x01},
+		},
 	}
 
 	for _, c := range caps {
@@ -534,12 +596,18 @@ func TestLongLivedGracefulRestartCapability(t *testing.T) {
 	llgr := LongLivedGracefulRestart{
 		Families: []LongLivedGracefulRestartFamily{
 			{
-				Family:              Family{AFI: AFIIPv4, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv4,
+					SAFI: SAFIUnicast,
+				},
 				ForwardingPreserved: true,
 				StaleTime:           maxLongLivedStaleTime,
 			},
 			{
-				Family:    Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				},
 				StaleTime: 24 * time.Hour,
 			},
 		},
@@ -573,6 +641,7 @@ func TestLongLivedGracefulRestartCapability(t *testing.T) {
 	c = must(LongLivedGracefulRestartCapability(LongLivedGracefulRestart{
 		Families: []LongLivedGracefulRestartFamily{{StaleTime: 90500 * time.Millisecond}},
 	}))
+
 	if got := must(c.LongLivedGracefulRestart()).Families[0].StaleTime; got != 90*time.Second {
 		t.Fatalf("unexpected stale time: got %s, want 90s", got)
 	}
@@ -609,11 +678,17 @@ func TestLongLivedGracefulRestartCapabilityErrors(t *testing.T) {
 	// truncated family entry, and a whole entry plus a truncated one.
 	caps := []Capability{
 		must(GracefulRestartCapability(GracefulRestart{})),
-		{Code: CapabilityLongLivedGracefulRestart, Data: []byte{0x00, 0x01, 0x01, 0x80, 0x00, 0x00}},
-		{Code: CapabilityLongLivedGracefulRestart, Data: []byte{
-			0x00, 0x01, 0x01, 0x80, 0x00, 0x00, 0x00,
-			0x00, 0x02, 0x01,
-		}},
+		{
+			Code: CapabilityLongLivedGracefulRestart,
+			Data: []byte{0x00, 0x01, 0x01, 0x80, 0x00, 0x00},
+		},
+		{
+			Code: CapabilityLongLivedGracefulRestart,
+			Data: []byte{
+				0x00, 0x01, 0x01, 0x80, 0x00, 0x00, 0x00,
+				0x00, 0x02, 0x01,
+			},
+		},
 	}
 
 	for _, c := range caps {
@@ -711,13 +786,11 @@ func TestOpenParseFourOctetASWins(t *testing.T) {
 func TestOpenHoldTimeMax(t *testing.T) {
 	t.Parallel()
 
-	o := &Open{
+	b, err := (&Open{
 		ASN:      64496,
 		HoldTime: 65535 * time.Second,
 		ID:       MustParseIdentifier("192.0.2.1"),
-	}
-
-	b, err := o.AppendBinary(nil)
+	}).AppendBinary(nil)
 	if err != nil {
 		t.Fatalf("failed to marshal OPEN: %v", err)
 	}
@@ -739,12 +812,24 @@ func TestCapabilityExtendedNextHop(t *testing.T) {
 		{
 			name: "round trip",
 			c: ExtendedNextHopCapability(
-				Family{AFI: AFIIPv4, SAFI: SAFIUnicast},
-				Family{AFI: AFIIPv4, SAFI: SAFIMulticast},
+				Family{
+					AFI:  AFIIPv4,
+					SAFI: SAFIUnicast,
+				},
+				Family{
+					AFI:  AFIIPv4,
+					SAFI: SAFIMulticast,
+				},
 			),
 			want: []Family{
-				{AFI: AFIIPv4, SAFI: SAFIUnicast},
-				{AFI: AFIIPv4, SAFI: SAFIMulticast},
+				{
+					AFI:  AFIIPv4,
+					SAFI: SAFIUnicast,
+				},
+				{
+					AFI:  AFIIPv4,
+					SAFI: SAFIMulticast,
+				},
 			},
 		},
 		{
@@ -755,11 +840,17 @@ func TestCapabilityExtendedNextHop(t *testing.T) {
 			// RFC 8950 defines IPv6 next hops only: an entry naming any
 			// other next hop AFI is skipped, not reported.
 			name: "other next hop AFI",
-			c: Capability{Code: CapabilityExtendedNextHop, Data: []byte{
-				0x00, 0x01, 0x00, 0x01, 0x00, 0x01, // IPv4 unicast, IPv4 next hop
-				0x00, 0x01, 0x00, 0x01, 0x00, 0x02, // IPv4 unicast, IPv6 next hop
+			c: Capability{
+				Code: CapabilityExtendedNextHop,
+				Data: []byte{
+					0x00, 0x01, 0x00, 0x01, 0x00, 0x01, // IPv4 unicast, IPv4 next hop
+					0x00, 0x01, 0x00, 0x01, 0x00, 0x02, // IPv4 unicast, IPv6 next hop
+				},
+			},
+			want: []Family{{
+				AFI:  AFIIPv4,
+				SAFI: SAFIUnicast,
 			}},
-			want: []Family{{AFI: AFIIPv4, SAFI: SAFIUnicast}},
 		},
 		{
 			name:    "wrong code",
@@ -767,8 +858,11 @@ func TestCapabilityExtendedNextHop(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "bad length",
-			c:       Capability{Code: CapabilityExtendedNextHop, Data: []byte{0x00, 0x01, 0x00, 0x01}},
+			name: "bad length",
+			c: Capability{
+				Code: CapabilityExtendedNextHop,
+				Data: []byte{0x00, 0x01, 0x00, 0x01},
+			},
 			wantErr: true,
 		},
 	}
@@ -785,6 +879,7 @@ func TestCapabilityExtendedNextHop(t *testing.T) {
 
 				return
 			}
+
 			if err != nil {
 				t.Fatalf("failed to parse extended next hop capability: %v", err)
 			}
@@ -802,9 +897,28 @@ func TestAddPathCapability(t *testing.T) {
 	// One family per direction combination, so every send/receive wire
 	// value round trips.
 	fs := []AddPathFamily{
-		{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, Send: true, Receive: true},
-		{Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast}, Receive: true},
-		{Family: Family{AFI: AFIIPv6, SAFI: SAFIMulticast}, Send: true},
+		{
+			Family: Family{
+				AFI:  AFIIPv4,
+				SAFI: SAFIUnicast,
+			},
+			Send:    true,
+			Receive: true,
+		},
+		{
+			Family: Family{
+				AFI:  AFIIPv6,
+				SAFI: SAFIUnicast,
+			},
+			Receive: true,
+		},
+		{
+			Family: Family{
+				AFI:  AFIIPv6,
+				SAFI: SAFIMulticast,
+			},
+			Send: true,
+		},
 	}
 
 	c, err := AddPathCapability(fs...)
@@ -817,6 +931,7 @@ func TestAddPathCapability(t *testing.T) {
 		0x00, 0x02, 0x01, 0x01,
 		0x00, 0x02, 0x02, 0x02,
 	}
+
 	if d := diff(t, want, c.Data); d != "" {
 		t.Fatalf("unexpected capability data (-want +got):\n%s", d)
 	}
@@ -835,7 +950,12 @@ func TestAddPathCapabilityErrors(t *testing.T) {
 	t.Parallel()
 
 	// A family naming no direction has no wire value to encode.
-	if _, err := AddPathCapability(AddPathFamily{Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}}); err == nil {
+	f := AddPathFamily{Family: Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIUnicast,
+	}}
+
+	if _, err := AddPathCapability(f); err == nil {
 		t.Fatal("expected an error, but none occurred")
 	}
 
@@ -849,15 +969,24 @@ func TestAddPathCapabilityErrors(t *testing.T) {
 		},
 		{
 			name: "truncated entry",
-			c:    Capability{Code: CapabilityAddPath, Data: []byte{0x00, 0x01, 0x01}},
+			c: Capability{
+				Code: CapabilityAddPath,
+				Data: []byte{0x00, 0x01, 0x01},
+			},
 		},
 		{
 			name: "send/receive zero",
-			c:    Capability{Code: CapabilityAddPath, Data: []byte{0x00, 0x01, 0x01, 0x00}},
+			c: Capability{
+				Code: CapabilityAddPath,
+				Data: []byte{0x00, 0x01, 0x01, 0x00},
+			},
 		},
 		{
 			name: "send/receive out of range",
-			c:    Capability{Code: CapabilityAddPath, Data: []byte{0x00, 0x01, 0x01, 0x04}},
+			c: Capability{
+				Code: CapabilityAddPath,
+				Data: []byte{0x00, 0x01, 0x01, 0x04},
+			},
 		},
 	}
 
@@ -957,12 +1086,30 @@ func TestFQDNCapabilityErrors(t *testing.T) {
 	// The decoder rejects other capabilities and malformed data: missing
 	// or truncated fields, and trailing bytes.
 	caps := []Capability{
-		{Code: CapabilityMultiprotocol, Data: []byte{0x00}},
-		{Code: CapabilityFQDN, Data: nil},
-		{Code: CapabilityFQDN, Data: []byte{0x02, 'a'}},
-		{Code: CapabilityFQDN, Data: []byte{0x01, 'a'}},
-		{Code: CapabilityFQDN, Data: []byte{0x01, 'a', 0x02, 'b'}},
-		{Code: CapabilityFQDN, Data: []byte{0x00, 0x00, 0xff}},
+		{
+			Code: CapabilityMultiprotocol,
+			Data: []byte{0x00},
+		},
+		{
+			Code: CapabilityFQDN,
+			Data: nil,
+		},
+		{
+			Code: CapabilityFQDN,
+			Data: []byte{0x02, 'a'},
+		},
+		{
+			Code: CapabilityFQDN,
+			Data: []byte{0x01, 'a'},
+		},
+		{
+			Code: CapabilityFQDN,
+			Data: []byte{0x01, 'a', 0x02, 'b'},
+		},
+		{
+			Code: CapabilityFQDN,
+			Data: []byte{0x00, 0x00, 0xff},
+		},
 	}
 
 	for _, c := range caps {

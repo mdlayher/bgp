@@ -29,7 +29,10 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 			name: "AS path",
 			attr: ASPath{
 				{ASNs: []uint32{64496, 65536}},
-				{Set: true, ASNs: []uint32{64497}},
+				{
+					Set:  true,
+					ASNs: []uint32{64497},
+				},
 			},
 			raw: RawAttribute{
 				Flags: AttrFlagTransitive,
@@ -88,7 +91,10 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 		},
 		{
 			name: "aggregator",
-			attr: Aggregator{ASN: 65536, ID: MustParseIdentifier("192.0.2.1")},
+			attr: Aggregator{
+				ASN: 65536,
+				ID:  MustParseIdentifier("192.0.2.1"),
+			},
 			raw: RawAttribute{
 				Flags: AttrFlagOptional | AttrFlagTransitive,
 				Type:  AttrAggregator,
@@ -144,7 +150,11 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 		},
 		{
 			name: "large communities",
-			attr: LargeCommunities{{Global: 65536, Local1: 1, Local2: 2}},
+			attr: LargeCommunities{{
+				Global: 65536,
+				Local1: 1,
+				Local2: 2,
+			}},
 			raw: RawAttribute{
 				Flags: AttrFlagOptional | AttrFlagTransitive,
 				Type:  AttrLargeCommunities,
@@ -167,7 +177,10 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 		{
 			name: "MP reach IPv6",
 			attr: MPReachNLRI{
-				Family:  Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				},
 				NextHop: netip.MustParseAddr("2001:db8::1"),
 				NLRI:    Prefixes{netip.MustParsePrefix("2001:db8::/32")},
 			},
@@ -186,7 +199,10 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 		{
 			name: "MP reach IPv6 link local",
 			attr: MPReachNLRI{
-				Family:    Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				},
 				NextHop:   netip.MustParseAddr("2001:db8::1"),
 				LinkLocal: netip.MustParseAddr("fe80::1"),
 				NLRI:      Prefixes{netip.MustParsePrefix("::/0")},
@@ -211,7 +227,10 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 			// collectors see real peers send it.
 			name: "MP reach IPv4-mapped IPv6 next hop",
 			attr: MPReachNLRI{
-				Family:  Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				},
 				NextHop: netip.MustParseAddr("::ffff:198.51.100.1"),
 				NLRI:    Prefixes{netip.MustParsePrefix("2001:db8::/32")},
 			},
@@ -232,7 +251,10 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 			// which has no four byte form to be re-encoded into at all.
 			name: "MP reach IPv4-mapped IPv6 next hop with link local",
 			attr: MPReachNLRI{
-				Family:    Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				},
 				NextHop:   netip.MustParseAddr("::ffff:198.51.100.1"),
 				LinkLocal: netip.MustParseAddr("fe80::1"),
 				NLRI:      Prefixes{netip.MustParsePrefix("2001:db8::/32")},
@@ -253,7 +275,10 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 		{
 			name: "MP reach RFC 8950 IPv4 via IPv6",
 			attr: MPReachNLRI{
-				Family:  Family{AFI: AFIIPv4, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv4,
+					SAFI: SAFIUnicast,
+				},
 				NextHop: netip.MustParseAddr("2001:db8::1"),
 				NLRI:    Prefixes{netip.MustParsePrefix("203.0.113.0/24")},
 			},
@@ -272,7 +297,10 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 		{
 			name: "MP unreach IPv6 end-of-RIB",
 			attr: MPUnreachNLRI{
-				Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				},
 			},
 			raw: RawAttribute{
 				Flags: AttrFlagOptional,
@@ -288,7 +316,10 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 			// real EVPN bytes rather than to filler.
 			name: "MP reach L2VPN EVPN",
 			attr: MPReachNLRI{
-				Family:  Family{AFI: AFIL2VPN, SAFI: SAFIEVPN},
+				Family: Family{
+					AFI:  AFIL2VPN,
+					SAFI: SAFIEVPN,
+				},
 				NextHop: netip.MustParseAddr("192.0.2.1"),
 				NLRI: EVPNRoutes{{
 					Type: EVPNRouteInclusiveMulticastEthernetTag,
@@ -323,7 +354,10 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 			// around it is pinned to real BGP-LS bytes rather than filler.
 			name: "MP reach BGP-LS",
 			attr: MPReachNLRI{
-				Family:  Family{AFI: AFILinkState, SAFI: SAFILinkState},
+				Family: Family{
+					AFI:  AFILinkState,
+					SAFI: SAFILinkState,
+				},
 				NextHop: netip.MustParseAddr("192.0.2.1"),
 				NLRI: LinkStateRoutes{{
 					Type: LinkStateRouteNode,
@@ -358,7 +392,10 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 			// label-and-RD-prefixed NLRI is unmodeled, carried verbatim.
 			name: "MP reach VPN-IPv4",
 			attr: MPReachNLRI{
-				Family:  Family{AFI: AFIIPv4, SAFI: SAFIMPLSVPN},
+				Family: Family{
+					AFI:  AFIIPv4,
+					SAFI: SAFIMPLSVPN,
+				},
 				NextHop: netip.MustParseAddr("192.0.2.1"),
 				NLRI: RawNLRI{
 					112,
@@ -389,7 +426,10 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 			// strips and restores ahead of the 16 byte address.
 			name: "MP reach VPN-IPv6",
 			attr: MPReachNLRI{
-				Family:  Family{AFI: AFIIPv6, SAFI: SAFIMPLSVPN},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIMPLSVPN,
+				},
 				NextHop: netip.MustParseAddr("2001:db8::1"),
 				NLRI:    RawNLRI{120, 0x00, 0x01, 0x31, 0x00, 0x00, 0xfb, 0xf0, 0x00, 0x00, 0x00, 0x01, 0x20, 0x01, 0x0d, 0xb8},
 			},
@@ -412,7 +452,10 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 			// its own zero route distinguisher.
 			name: "MP reach VPN-IPv6 link local",
 			attr: MPReachNLRI{
-				Family:    Family{AFI: AFIIPv6, SAFI: SAFIMPLSVPN},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIMPLSVPN,
+				},
 				NextHop:   netip.MustParseAddr("2001:db8::1"),
 				LinkLocal: netip.MustParseAddr("fe80::1"),
 			},
@@ -436,8 +479,11 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 			// itself is unmodeled NLRI, carried verbatim.
 			name: "MP reach absent next hop",
 			attr: MPReachNLRI{
-				Family: Family{AFI: AFIIPv4, SAFI: 133},
-				NLRI:   RawNLRI{0x05, 0x01, 0x18, 192, 0, 2},
+				Family: Family{
+					AFI:  AFIIPv4,
+					SAFI: 133,
+				},
+				NLRI: RawNLRI{0x05, 0x01, 0x18, 192, 0, 2},
 			},
 			raw: RawAttribute{
 				Flags: AttrFlagOptional,
@@ -456,7 +502,10 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 			// re-marshal byte for byte rather than failing.
 			name: "MP unreach unmodeled family",
 			attr: MPUnreachNLRI{
-				Family: Family{AFI: AFIL2VPN, SAFI: SAFIVPLS},
+				Family: Family{
+					AFI:  AFIL2VPN,
+					SAFI: SAFIVPLS,
+				},
 				NLRI: RawNLRI{
 					0x00, 0x11,
 					0x00, 0x00, 0xfb, 0xf0, 0x00, 0x00, 0x00, 0x01,
@@ -543,8 +592,15 @@ func TestASPathConfederationSegments(t *testing.T) {
 	// confederation set from aggregation, then the external path from
 	// before the route entered the confederation.
 	path := ASPath{
-		{Confed: true, ASNs: []uint32{65001, 65003}},
-		{Set: true, Confed: true, ASNs: []uint32{65004}},
+		{
+			Confed: true,
+			ASNs:   []uint32{65001, 65003},
+		},
+		{
+			Set:    true,
+			Confed: true,
+			ASNs:   []uint32{65004},
+		},
 		{ASNs: []uint32{64496}},
 	}
 
@@ -575,7 +631,10 @@ func TestASPathConfederationSegments(t *testing.T) {
 		t.Fatalf("failed to parse attribute: %v", err)
 	}
 
-	want := ASPath{{Confed: true, ASNs: []uint32{65001}}}
+	want := ASPath{{
+		Confed: true,
+		ASNs:   []uint32{65001},
+	}}
 	if d := diff[Attribute](t, want, got); d != "" {
 		t.Fatalf("unexpected AS path (-want +got):\n%s", d)
 	}
@@ -591,7 +650,10 @@ func TestASPathSegmentErrors(t *testing.T) {
 		{
 			// An AS_SET is unordered and must not be split.
 			name: "long set",
-			path: ASPath{{Set: true, ASNs: make([]uint32, 256)}},
+			path: ASPath{{
+				Set:  true,
+				ASNs: make([]uint32, 256),
+			}},
 		},
 		{
 			name: "empty segment",
@@ -619,105 +681,165 @@ func TestRawAttributeParseErrors(t *testing.T) {
 		subcode uint8
 	}{
 		{
-			name:    "origin length",
-			a:       RawAttribute{Type: AttrOrigin, Data: []byte{0x00, 0x00}},
+			name: "origin length",
+			a: RawAttribute{
+				Type: AttrOrigin,
+				Data: []byte{0x00, 0x00},
+			},
 			subcode: SubcodeAttributeLengthError,
 		},
 		{
-			name:    "origin value",
-			a:       RawAttribute{Type: AttrOrigin, Data: []byte{0x03}},
+			name: "origin value",
+			a: RawAttribute{
+				Type: AttrOrigin,
+				Data: []byte{0x03},
+			},
 			subcode: SubcodeInvalidOriginAttribute,
 		},
 		{
-			name:    "AS path segment header truncated",
-			a:       RawAttribute{Type: AttrASPath, Data: []byte{0x02}},
+			name: "AS path segment header truncated",
+			a: RawAttribute{
+				Type: AttrASPath,
+				Data: []byte{0x02},
+			},
 			subcode: SubcodeMalformedASPath,
 		},
 		{
-			name:    "AS path segment type",
-			a:       RawAttribute{Type: AttrASPath, Data: []byte{0x05, 0x01, 0, 0, 0xfb, 0xf0}},
+			name: "AS path segment type",
+			a: RawAttribute{
+				Type: AttrASPath,
+				Data: []byte{0x05, 0x01, 0, 0, 0xfb, 0xf0},
+			},
 			subcode: SubcodeMalformedASPath,
 		},
 		{
-			name:    "AS path segment empty",
-			a:       RawAttribute{Type: AttrASPath, Data: []byte{0x02, 0x00}},
+			name: "AS path segment empty",
+			a: RawAttribute{
+				Type: AttrASPath,
+				Data: []byte{0x02, 0x00},
+			},
 			subcode: SubcodeMalformedASPath,
 		},
 		{
-			name:    "AS path segment ASNs truncated",
-			a:       RawAttribute{Type: AttrASPath, Data: []byte{0x02, 0x02, 0, 0, 0xfb, 0xf0}},
+			name: "AS path segment ASNs truncated",
+			a: RawAttribute{
+				Type: AttrASPath,
+				Data: []byte{0x02, 0x02, 0, 0, 0xfb, 0xf0},
+			},
 			subcode: SubcodeMalformedASPath,
 		},
 		{
-			name:    "next hop length",
-			a:       RawAttribute{Type: AttrNextHop, Data: []byte{192, 0, 2}},
+			name: "next hop length",
+			a: RawAttribute{
+				Type: AttrNextHop,
+				Data: []byte{192, 0, 2},
+			},
 			subcode: SubcodeAttributeLengthError,
 		},
 		{
-			name:    "multi exit disc length",
-			a:       RawAttribute{Type: AttrMED, Data: []byte{0x00}},
+			name: "multi exit disc length",
+			a: RawAttribute{
+				Type: AttrMED,
+				Data: []byte{0x00},
+			},
 			subcode: SubcodeAttributeLengthError,
 		},
 		{
-			name:    "local pref length",
-			a:       RawAttribute{Type: AttrLocalPref, Data: []byte{0x00}},
+			name: "local pref length",
+			a: RawAttribute{
+				Type: AttrLocalPref,
+				Data: []byte{0x00},
+			},
 			subcode: SubcodeAttributeLengthError,
 		},
 		{
-			name:    "atomic aggregate length",
-			a:       RawAttribute{Type: AttrAtomicAggregate, Data: []byte{0x00}},
+			name: "atomic aggregate length",
+			a: RawAttribute{
+				Type: AttrAtomicAggregate,
+				Data: []byte{0x00},
+			},
 			subcode: SubcodeAttributeLengthError,
 		},
 		{
-			name:    "aggregator length",
-			a:       RawAttribute{Type: AttrAggregator, Data: []byte{0x00}},
+			name: "aggregator length",
+			a: RawAttribute{
+				Type: AttrAggregator,
+				Data: []byte{0x00},
+			},
 			subcode: SubcodeAttributeLengthError,
 		},
 		{
-			name:    "communities length",
-			a:       RawAttribute{Type: AttrCommunities, Data: []byte{0x00, 0x00}},
+			name: "communities length",
+			a: RawAttribute{
+				Type: AttrCommunities,
+				Data: []byte{0x00, 0x00},
+			},
 			subcode: SubcodeAttributeLengthError,
 		},
 		{
 			// RFC 7606, section 4: a repeated element attribute with no
 			// elements is a syntax error, not an empty list.
-			name:    "communities empty",
-			a:       RawAttribute{Type: AttrCommunities, Data: []byte{}},
+			name: "communities empty",
+			a: RawAttribute{
+				Type: AttrCommunities,
+				Data: []byte{},
+			},
 			subcode: SubcodeAttributeLengthError,
 		},
 		{
-			name:    "large communities empty",
-			a:       RawAttribute{Type: AttrLargeCommunities, Data: []byte{}},
+			name: "large communities empty",
+			a: RawAttribute{
+				Type: AttrLargeCommunities,
+				Data: []byte{},
+			},
 			subcode: SubcodeAttributeLengthError,
 		},
 		{
-			name:    "originator ID length",
-			a:       RawAttribute{Type: AttrOriginatorID, Data: []byte{192, 0, 2}},
+			name: "originator ID length",
+			a: RawAttribute{
+				Type: AttrOriginatorID,
+				Data: []byte{192, 0, 2},
+			},
 			subcode: SubcodeAttributeLengthError,
 		},
 		{
-			name:    "cluster list length",
-			a:       RawAttribute{Type: AttrClusterList, Data: []byte{192, 0}},
+			name: "cluster list length",
+			a: RawAttribute{
+				Type: AttrClusterList,
+				Data: []byte{192, 0},
+			},
 			subcode: SubcodeAttributeLengthError,
 		},
 		{
-			name:    "extended communities length",
-			a:       RawAttribute{Type: AttrExtendedCommunities, Data: []byte{0x00, 0x02}},
+			name: "extended communities length",
+			a: RawAttribute{
+				Type: AttrExtendedCommunities,
+				Data: []byte{0x00, 0x02},
+			},
 			subcode: SubcodeAttributeLengthError,
 		},
 		{
-			name:    "large communities length",
-			a:       RawAttribute{Type: AttrLargeCommunities, Data: []byte{0x00, 0x00}},
+			name: "large communities length",
+			a: RawAttribute{
+				Type: AttrLargeCommunities,
+				Data: []byte{0x00, 0x00},
+			},
 			subcode: SubcodeAttributeLengthError,
 		},
 		{
-			name:    "only to customer length",
-			a:       RawAttribute{Type: AttrOTC, Data: []byte{0x00}},
+			name: "only to customer length",
+			a: RawAttribute{
+				Type: AttrOTC,
+				Data: []byte{0x00},
+			},
 			subcode: SubcodeAttributeLengthError,
 		},
 		{
-			name:    "MP reach short",
-			a:       RawAttribute{Type: AttrMPReachNLRI, Data: []byte{0x00, 0x02}},
+			name: "MP reach short",
+			a: RawAttribute{
+				Type: AttrMPReachNLRI,
+				Data: []byte{0x00, 0x02},
+			},
 			subcode: SubcodeOptionalAttributeError,
 		},
 		{
@@ -850,8 +972,11 @@ func TestRawAttributeParseErrors(t *testing.T) {
 			subcode: SubcodeOptionalAttributeError,
 		},
 		{
-			name:    "MP unreach short",
-			a:       RawAttribute{Type: AttrMPUnreachNLRI, Data: []byte{0x00, 0x02}},
+			name: "MP unreach short",
+			a: RawAttribute{
+				Type: AttrMPUnreachNLRI,
+				Data: []byte{0x00, 0x02},
+			},
 			subcode: SubcodeOptionalAttributeError,
 		},
 		{
@@ -877,7 +1002,11 @@ func TestRawAttributeParseErrors(t *testing.T) {
 				t.Fatalf("failed to reconstruct attribute: %v", aerr)
 			}
 
-			wantMessageError(t, err, NotificationUpdateMessageError, tt.subcode, data)
+			wantMessageError(t, err, &Notification{
+				Code:    NotificationUpdateMessageError,
+				Subcode: tt.subcode,
+				Data:    data,
+			})
 		})
 	}
 }
@@ -910,7 +1039,12 @@ func TestRawAttributeParseUnknownType(t *testing.T) {
 
 	// A malformed attribute of a known type is a protocol error, and must
 	// not be mistaken for an unknown one.
-	_, err = (RawAttribute{Type: AttrOrigin, Data: []byte{1, 2}}).Parse()
+	malformed := RawAttribute{
+		Type: AttrOrigin,
+		Data: []byte{1, 2},
+	}
+
+	_, err = malformed.Parse()
 	if errors.Is(err, ErrUnknownAttribute) {
 		t.Fatalf("malformed known attribute matched ErrUnknownAttribute: %v", err)
 	}
@@ -950,7 +1084,10 @@ func TestParseRawAttributesErrors(t *testing.T) {
 			t.Parallel()
 
 			_, err := parseRawAttributes(tt.b)
-			wantMessageError(t, err, NotificationUpdateMessageError, SubcodeMalformedAttributeList, nil)
+			wantMessageError(t, err, &Notification{
+				Code:    NotificationUpdateMessageError,
+				Subcode: SubcodeMalformedAttributeList,
+			})
 		})
 	}
 }
@@ -1050,7 +1187,10 @@ func TestMarshalAttributesErrors(t *testing.T) {
 		{
 			name: "MP reach next hops invalid",
 			attr: MPReachNLRI{
-				Family:    Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				},
 				NextHop:   netip.MustParseAddr("192.0.2.1"),
 				LinkLocal: netip.MustParseAddr("fe80::1"),
 			},
@@ -1058,7 +1198,10 @@ func TestMarshalAttributesErrors(t *testing.T) {
 		{
 			name: "MP reach prefix family mismatch",
 			attr: MPReachNLRI{
-				Family:  Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				},
 				NextHop: netip.MustParseAddr("2001:db8::1"),
 				NLRI:    Prefixes{netip.MustParsePrefix("192.0.2.0/24")},
 			},
@@ -1066,14 +1209,20 @@ func TestMarshalAttributesErrors(t *testing.T) {
 		{
 			name: "MP unreach prefixes in a non-prefix family",
 			attr: MPUnreachNLRI{
-				Family: Family{AFI: AFIL2VPN, SAFI: SAFIEVPN},
-				NLRI:   Prefixes{netip.MustParsePrefix("192.0.2.0/24")},
+				Family: Family{
+					AFI:  AFIL2VPN,
+					SAFI: SAFIEVPN,
+				},
+				NLRI: Prefixes{netip.MustParsePrefix("192.0.2.0/24")},
 			},
 		},
 		{
 			name: "MP reach BGP-LS routes in a prefix family",
 			attr: MPReachNLRI{
-				Family:  Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				},
 				NextHop: netip.MustParseAddr("2001:db8::1"),
 				NLRI:    LinkStateRoutes{{Type: LinkStateRouteNode}},
 			},
@@ -1081,7 +1230,10 @@ func TestMarshalAttributesErrors(t *testing.T) {
 		{
 			name: "MP reach BGP-LS route value too long",
 			attr: MPReachNLRI{
-				Family:  Family{AFI: AFILinkState, SAFI: SAFILinkState},
+				Family: Family{
+					AFI:  AFILinkState,
+					SAFI: SAFILinkState,
+				},
 				NextHop: netip.MustParseAddr("192.0.2.1"),
 				NLRI: LinkStateRoutes{{
 					Type:  LinkStateRouteNode,
@@ -1092,7 +1244,10 @@ func TestMarshalAttributesErrors(t *testing.T) {
 		{
 			name: "MP reach EVPN routes in a prefix family",
 			attr: MPReachNLRI{
-				Family:  Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				},
 				NextHop: netip.MustParseAddr("2001:db8::1"),
 				NLRI:    EVPNRoutes{{Type: EVPNRouteIPPrefix}},
 			},
@@ -1100,7 +1255,10 @@ func TestMarshalAttributesErrors(t *testing.T) {
 		{
 			name: "MP reach EVPN route value too long",
 			attr: MPReachNLRI{
-				Family:  Family{AFI: AFIL2VPN, SAFI: SAFIEVPN},
+				Family: Family{
+					AFI:  AFIL2VPN,
+					SAFI: SAFIEVPN,
+				},
 				NextHop: netip.MustParseAddr("192.0.2.1"),
 				NLRI: EVPNRoutes{{
 					Type:  EVPNRouteMACIPAdvertisement,
@@ -1192,7 +1350,10 @@ func TestASPathOrigin(t *testing.T) {
 		p    ASPath
 		want OriginAS
 	}{
-		{name: "empty", want: OriginAS{Empty: true}},
+		{
+			name: "empty",
+			want: OriginAS{Empty: true},
+		},
 		{
 			name: "single sequence",
 			p:    ASPath{{ASNs: []uint32{64496, 65536}}},
@@ -1200,12 +1361,24 @@ func TestASPathOrigin(t *testing.T) {
 		},
 		{
 			name: "set then sequence",
-			p:    ASPath{{Set: true, ASNs: []uint32{64496, 64497}}, {ASNs: []uint32{65536}}},
+			p: ASPath{
+				{
+					Set:  true,
+					ASNs: []uint32{64496, 64497},
+				},
+				{ASNs: []uint32{65536}},
+			},
 			want: OriginAS{ASN: 65536},
 		},
 		{
 			name: "sequence then set",
-			p:    ASPath{{ASNs: []uint32{64496}}, {Set: true, ASNs: []uint32{65536, 65537}}},
+			p: ASPath{
+				{ASNs: []uint32{64496}},
+				{
+					Set:  true,
+					ASNs: []uint32{65536, 65537},
+				},
+			},
 			want: OriginAS{Set: true},
 		},
 		{
@@ -1217,7 +1390,10 @@ func TestASPathOrigin(t *testing.T) {
 			// A route originated within the local confederation carries
 			// only confederation segments, which never name an origin.
 			name: "confederation only",
-			p:    ASPath{{Confed: true, ASNs: []uint32{65001}}},
+			p: ASPath{{
+				Confed: true,
+				ASNs:   []uint32{65001},
+			}},
 			want: OriginAS{Empty: true},
 		},
 		{
@@ -1225,7 +1401,13 @@ func TestASPathOrigin(t *testing.T) {
 			// it: the confederation record precedes the external path,
 			// whose rightmost AS remains the origin.
 			name: "confederation then sequence",
-			p:    ASPath{{Confed: true, ASNs: []uint32{65001}}, {ASNs: []uint32{64496}}},
+			p: ASPath{
+				{
+					Confed: true,
+					ASNs:   []uint32{65001},
+				},
+				{ASNs: []uint32{64496}},
+			},
 			want: OriginAS{ASN: 64496},
 		},
 	}
@@ -1250,8 +1432,18 @@ func TestExtendedCommunityValidationState(t *testing.T) {
 		want ValidationState
 		ok   bool
 	}{
-		{name: "valid", c: NewValidationState(ValidationStateValid), want: ValidationStateValid, ok: true},
-		{name: "invalid", c: NewValidationState(ValidationStateInvalid), want: ValidationStateInvalid, ok: true},
+		{
+			name: "valid",
+			c:    NewValidationState(ValidationStateValid),
+			want: ValidationStateValid,
+			ok:   true,
+		},
+		{
+			name: "invalid",
+			c:    NewValidationState(ValidationStateInvalid),
+			want: ValidationStateInvalid,
+			ok:   true,
+		},
 		{
 			// RFC 8097 reserves the leading value bytes; a state outside the
 			// registry is carried, not judged.
@@ -1260,7 +1452,10 @@ func TestExtendedCommunityValidationState(t *testing.T) {
 			want: 7,
 			ok:   true,
 		},
-		{name: "route target", c: must(NewRouteTarget(64496, 100))},
+		{
+			name: "route target",
+			c:    must(NewRouteTarget(64496, 100)),
+		},
 		{
 			// The transitive opaque type is a different community.
 			name: "transitive opaque",
@@ -1301,23 +1496,83 @@ func TestAttributeStrings(t *testing.T) {
 		s    string
 		want string
 	}{
-		{name: "origin IGP", s: OriginIGP.String(), want: "IGP"},
-		{name: "origin EGP", s: OriginEGP.String(), want: "EGP"},
-		{name: "origin incomplete", s: OriginIncomplete.String(), want: "incomplete"},
-		{name: "origin unknown", s: Origin(5).String(), want: "unknown(5)"},
-		{name: "community", s: NewCommunity(64496, 100).String(), want: "64496:100"},
-		{name: "community LLGR_STALE", s: CommunityLLGRStale.String(), want: "LLGR_STALE"},
-		{name: "community NO_LLGR", s: CommunityNoLLGR.String(), want: "NO_LLGR"},
-		{name: "community GRACEFUL_SHUTDOWN", s: CommunityGracefulShutdown.String(), want: "GRACEFUL_SHUTDOWN"},
-		{name: "community BLACKHOLE", s: NewCommunity(65535, 666).String(), want: "BLACKHOLE"},
-		{name: "community NO_EXPORT", s: NewCommunity(65535, 65281).String(), want: "NO_EXPORT"},
-		{name: "community NO_ADVERTISE", s: CommunityNoAdvertise.String(), want: "NO_ADVERTISE"},
-		{name: "community NO_EXPORT_SUBCONFED", s: CommunityNoExportSubconfed.String(), want: "NO_EXPORT_SUBCONFED"},
-		{name: "community NOPEER", s: CommunityNoPeer.String(), want: "NOPEER"},
-		{name: "community reserved unnamed", s: NewCommunity(65535, 8).String(), want: "65535:8"},
+		{
+			name: "origin IGP",
+			s:    OriginIGP.String(),
+			want: "IGP",
+		},
+		{
+			name: "origin EGP",
+			s:    OriginEGP.String(),
+			want: "EGP",
+		},
+		{
+			name: "origin incomplete",
+			s:    OriginIncomplete.String(),
+			want: "incomplete",
+		},
+		{
+			name: "origin unknown",
+			s:    Origin(5).String(),
+			want: "unknown(5)",
+		},
+		{
+			name: "community",
+			s:    NewCommunity(64496, 100).String(),
+			want: "64496:100",
+		},
+		{
+			name: "community LLGR_STALE",
+			s:    CommunityLLGRStale.String(),
+			want: "LLGR_STALE",
+		},
+		{
+			name: "community NO_LLGR",
+			s:    CommunityNoLLGR.String(),
+			want: "NO_LLGR",
+		},
+		{
+			name: "community GRACEFUL_SHUTDOWN",
+			s:    CommunityGracefulShutdown.String(),
+			want: "GRACEFUL_SHUTDOWN",
+		},
+		{
+			name: "community BLACKHOLE",
+			s:    NewCommunity(65535, 666).String(),
+			want: "BLACKHOLE",
+		},
+		{
+			name: "community NO_EXPORT",
+			s:    NewCommunity(65535, 65281).String(),
+			want: "NO_EXPORT",
+		},
+		{
+			name: "community NO_ADVERTISE",
+			s:    CommunityNoAdvertise.String(),
+			want: "NO_ADVERTISE",
+		},
+		{
+			name: "community NO_EXPORT_SUBCONFED",
+			s:    CommunityNoExportSubconfed.String(),
+			want: "NO_EXPORT_SUBCONFED",
+		},
+		{
+			name: "community NOPEER",
+			s:    CommunityNoPeer.String(),
+			want: "NOPEER",
+		},
+		{
+			name: "community reserved unnamed",
+			s:    NewCommunity(65535, 8).String(),
+			want: "65535:8",
+		},
 		{
 			name: "large community",
-			s:    LargeCommunity{Global: 65536, Local1: 1, Local2: 2}.String(),
+			s: LargeCommunity{
+				Global: 65536,
+				Local1: 1,
+				Local2: 2,
+			}.String(),
 			want: "65536:1:2",
 		},
 		{
@@ -1359,6 +1614,8 @@ func TestAttributeStrings(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			if tt.s != tt.want {
 				t.Fatalf("unexpected string: got %q, want %q", tt.s, tt.want)
 			}
@@ -1502,8 +1759,11 @@ func TestLookup(t *testing.T) {
 	t.Run("malformed", func(t *testing.T) {
 		t.Parallel()
 
-		bad := RawAttributes{{Flags: AttrFlagTransitive, Type: AttrOrigin, Data: []byte{0xff}}}
-		_, _, err := Lookup[Origin](bad)
+		_, _, err := Lookup[Origin](RawAttributes{{
+			Flags: AttrFlagTransitive,
+			Type:  AttrOrigin,
+			Data:  []byte{0xff},
+		}})
 		if _, ok := errors.AsType[*MessageError](err); !ok {
 			t.Fatalf("expected a MessageError, but got: %v", err)
 		}

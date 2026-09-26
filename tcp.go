@@ -240,7 +240,6 @@ func (d *Dialer) dial(ctx context.Context, addr netip.Addr, md5 string) (*Conn, 
 		port = Port
 	}
 
-	raddr := netip.AddrPortFrom(addr, port)
 	if err := d.check(); err != nil {
 		return nil, err
 	}
@@ -263,7 +262,7 @@ func (d *Dialer) dial(ctx context.Context, addr netip.Addr, md5 string) (*Conn, 
 		nd.LocalAddr = net.TCPAddrFromAddrPort(d.LocalAddr)
 	}
 
-	c, err := nd.DialContext(ctx, tcpNetwork(addr), raddr.String())
+	c, err := nd.DialContext(ctx, tcpNetwork(addr), netip.AddrPortFrom(addr, port).String())
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +325,11 @@ func (lc *ListenConfig) Listen(ctx context.Context, laddr netip.AddrPort) (*List
 		return nil, err
 	}
 
-	return &Listener{l: tl, rc: rc, v4: addr.Is4()}, nil
+	return &Listener{
+		l:  tl,
+		rc: rc,
+		v4: addr.Is4(),
+	}, nil
 }
 
 // NewListener adopts an existing listening socket and returns a Listener
@@ -377,7 +380,12 @@ func (lc *ListenConfig) NewListener(l *net.TCPListener) (*Listener, error) {
 	// The net package applies its keepalive configuration to the connections
 	// accepted from a listener it created, and an adopted socket has none, so
 	// Accept applies the caller's instead.
-	return &Listener{l: l, rc: rc, v4: fam.v4, keepAlive: lc.KeepAlive}, nil
+	return &Listener{
+		l:         l,
+		rc:        rc,
+		v4:        fam.v4,
+		keepAlive: lc.KeepAlive,
+	}, nil
 }
 
 // A listenerFamily is the address family posture of a listening socket, read

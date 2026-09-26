@@ -58,9 +58,18 @@ func TestMessageRoundTrip(t *testing.T) {
 				ID:          MustParseIdentifier("192.0.2.1"),
 				FourOctetAS: true,
 				Capabilities: []Capability{
-					MultiprotocolCapability(Family{AFI: AFIIPv4, SAFI: SAFIUnicast}),
-					MultiprotocolCapability(Family{AFI: AFIIPv6, SAFI: SAFIUnicast}),
-					ExtendedNextHopCapability(Family{AFI: AFIIPv4, SAFI: SAFIUnicast}),
+					MultiprotocolCapability(Family{
+						AFI:  AFIIPv4,
+						SAFI: SAFIUnicast,
+					}),
+					MultiprotocolCapability(Family{
+						AFI:  AFIIPv6,
+						SAFI: SAFIUnicast,
+					}),
+					ExtendedNextHopCapability(Family{
+						AFI:  AFIIPv4,
+						SAFI: SAFIUnicast,
+					}),
 					{Code: CapabilityRouteRefresh},
 				},
 			},
@@ -86,15 +95,25 @@ func TestMessageRoundTrip(t *testing.T) {
 					OriginIGP,
 					ASPath{
 						{ASNs: []uint32{64496, 65536}},
-						{Set: true, ASNs: []uint32{64497, 64498}},
+						{
+							Set:  true,
+							ASNs: []uint32{64497, 64498},
+						},
 					},
 					NextHop(netip.MustParseAddr("192.0.2.1")),
 					MED(100),
 					LocalPref(200),
 					AtomicAggregate{},
-					Aggregator{ASN: 64496, ID: MustParseIdentifier("192.0.2.1")},
+					Aggregator{
+						ASN: 64496,
+						ID:  MustParseIdentifier("192.0.2.1"),
+					},
 					Communities{NewCommunity(64496, 100)},
-					LargeCommunities{{Global: 65536, Local1: 1, Local2: 2}},
+					LargeCommunities{{
+						Global: 65536,
+						Local1: 1,
+						Local2: 2,
+					}},
 				),
 				NLRI: []netip.Prefix{
 					netip.MustParsePrefix("203.0.113.0/24"),
@@ -111,7 +130,10 @@ func TestMessageRoundTrip(t *testing.T) {
 					OriginIncomplete,
 					ASPath{{ASNs: []uint32{64496}}},
 					MPReachNLRI{
-						Family:    Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+						Family: Family{
+							AFI:  AFIIPv6,
+							SAFI: SAFIUnicast,
+						},
 						NextHop:   netip.MustParseAddr("2001:db8::1"),
 						LinkLocal: netip.MustParseAddr("fe80::1"),
 						NLRI: Prefixes{
@@ -120,7 +142,10 @@ func TestMessageRoundTrip(t *testing.T) {
 						},
 					},
 					MPUnreachNLRI{
-						Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+						Family: Family{
+							AFI:  AFIIPv6,
+							SAFI: SAFIUnicast,
+						},
 						NLRI: Prefixes{
 							netip.MustParsePrefix("2001:db8:2::/48"),
 						},
@@ -136,7 +161,10 @@ func TestMessageRoundTrip(t *testing.T) {
 					OriginIGP,
 					ASPath{{ASNs: []uint32{64496}}},
 					MPReachNLRI{
-						Family:  Family{AFI: AFIIPv4, SAFI: SAFIUnicast},
+						Family: Family{
+							AFI:  AFIIPv4,
+							SAFI: SAFIUnicast,
+						},
 						NextHop: netip.MustParseAddr("2001:db8::1"),
 						NLRI: Prefixes{
 							netip.MustParsePrefix("203.0.113.0/24"),
@@ -151,7 +179,10 @@ func TestMessageRoundTrip(t *testing.T) {
 				Attributes: mustAttributes(
 					t,
 					MPUnreachNLRI{
-						Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+						Family: Family{
+							AFI:  AFIIPv6,
+							SAFI: SAFIUnicast,
+						},
 					},
 				),
 			},
@@ -166,11 +197,17 @@ func TestMessageRoundTrip(t *testing.T) {
 		},
 		{
 			name: "notification no data",
-			m:    &Notification{Code: NotificationCease, Subcode: 2},
+			m: &Notification{
+				Code:    NotificationCease,
+				Subcode: 2,
+			},
 		},
 		{
 			name: "route refresh",
-			m:    &RouteRefresh{Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast}},
+			m: &RouteRefresh{Family: Family{
+				AFI:  AFIIPv6,
+				SAFI: SAFIUnicast,
+			}},
 		},
 	}
 
@@ -293,7 +330,11 @@ func TestParseMessageErrors(t *testing.T) {
 				t.Fatalf("expected nil Message, but got: %v", r.Message)
 			}
 
-			wantMessageError(t, err, tt.code, tt.subcode, tt.data)
+			wantMessageError(t, err, &Notification{
+				Code:    tt.code,
+				Subcode: tt.subcode,
+				Data:    tt.data,
+			})
 		})
 	}
 }
@@ -305,16 +346,36 @@ func TestMessageTypeString(t *testing.T) {
 		typ  MessageType
 		want string
 	}{
-		{typ: MessageTypeOpen, want: "OPEN"},
-		{typ: MessageTypeUpdate, want: "UPDATE"},
-		{typ: MessageTypeNotification, want: "NOTIFICATION"},
-		{typ: MessageTypeKeepalive, want: "KEEPALIVE"},
-		{typ: MessageTypeRouteRefresh, want: "ROUTE-REFRESH"},
-		{typ: MessageType(0xff), want: "unknown(255)"},
+		{
+			typ:  MessageTypeOpen,
+			want: "OPEN",
+		},
+		{
+			typ:  MessageTypeUpdate,
+			want: "UPDATE",
+		},
+		{
+			typ:  MessageTypeNotification,
+			want: "NOTIFICATION",
+		},
+		{
+			typ:  MessageTypeKeepalive,
+			want: "KEEPALIVE",
+		},
+		{
+			typ:  MessageTypeRouteRefresh,
+			want: "ROUTE-REFRESH",
+		},
+		{
+			typ:  MessageType(0xff),
+			want: "unknown(255)",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
+
 			if got := tt.typ.String(); got != tt.want {
 				t.Fatalf("unexpected string: got %q, want %q", got, tt.want)
 			}
@@ -355,9 +416,9 @@ func testMessage(typ MessageType, body []byte) []byte {
 	return append(b, body...)
 }
 
-// wantMessageError asserts that err is a *MessageError carrying the given
-// NOTIFICATION code, subcode, and data, and returns it.
-func wantMessageError(tb testing.TB, err error, code NotificationCode, subcode uint8, data []byte) *MessageError {
+// wantMessageError asserts that err is a *MessageError whose Notification
+// matches want, and returns it.
+func wantMessageError(tb testing.TB, err error, want *Notification) *MessageError {
 	tb.Helper()
 
 	merr, ok := errors.AsType[*MessageError](err)
@@ -365,16 +426,8 @@ func wantMessageError(tb testing.TB, err error, code NotificationCode, subcode u
 		tb.Fatalf("expected *MessageError, but got: %v", err)
 	}
 
-	if d := diff(tb, code, merr.Code); d != "" {
-		tb.Fatalf("unexpected NOTIFICATION code (-want +got):\n%s", d)
-	}
-
-	if d := diff(tb, subcode, merr.Subcode); d != "" {
-		tb.Fatalf("unexpected NOTIFICATION subcode (-want +got):\n%s", d)
-	}
-
-	if d := diff(tb, data, merr.Data); d != "" {
-		tb.Fatalf("unexpected NOTIFICATION data (-want +got):\n%s", d)
+	if d := diff(tb, want, merr.Notification()); d != "" {
+		tb.Fatalf("unexpected NOTIFICATION (-want +got):\n%s", d)
 	}
 
 	return merr

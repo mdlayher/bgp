@@ -359,6 +359,30 @@ type GracefulRestartConfig struct {
 	Restarting func() bool
 }
 
+// [ErrNotEstablished] is returned by SendUpdate and the SendRouteRefresh
+// methods when there is no established session, and wrapped (per errors.Is)
+// in the error of a send whose connection write failed, since that failure
+// ends the session. It is the only session state a caller observes directly:
+// a route pusher winds down on it, and the next session's OnEstablished
+// starts a fresh one. A message which fails to marshal returns its error
+// alone, without [ErrNotEstablished]: the session is unaffected.
+var ErrNotEstablished = errors.New("bgp: session is not established")
+
+// errFSMIdle is DeliverConn's refusal while the FSM is in Idle: no Connect
+// is in progress to take the connection. Peer distinguishes it from other
+// delivery errors: between attempts, Peer adopts the connection to end its
+// idle hold early, or answers it with Cease / Connection Rejected itself
+// when no hold is ready to take it.
+var errFSMIdle = errors.New("bgp: FSM is idle")
+
+// implicitFamilies is the address family set of a speaker which advertises
+// no multiprotocol capabilities at all: the classic IPv4 unicast speaker of
+// RFC 4760. It is shared and must not be mutated.
+var implicitFamilies = []Family{{
+	AFI:  AFIIPv4,
+	SAFI: SAFIUnicast,
+}}
+
 // An FSM runs the RFC 4271 finite state machine for one peering. It owns
 // the whole connection lifecycle:
 //
@@ -409,9 +433,8 @@ type FSM struct {
 	//
 	// runningC is closed while the FSM is out of Idle, meaning a Connect
 	// is in progress, and replaced with a fresh open channel when it
-	// returns: a
-	// select with a default observes the state without blocking, and a
-	// receive blocks until the FSM is accepting.
+	// returns: a select with a default observes the state without
+	// blocking, and a receive blocks until the FSM is accepting.
 	mu       sync.Mutex
 	runningC chan struct{}
 	connC    chan *Conn
@@ -422,22 +445,6 @@ type FSM struct {
 	// attempt.currentState.
 	established atomic.Pointer[fsmConn]
 }
-
-// [ErrNotEstablished] is returned by SendUpdate and the SendRouteRefresh
-// methods when there is no established session, and wrapped (per errors.Is)
-// in the error of a send whose connection write failed, since that failure
-// ends the session. It is the only session state a caller observes directly:
-// a route pusher winds down on it, and the next session's OnEstablished
-// starts a fresh one. A message which fails to marshal returns its error
-// alone, without [ErrNotEstablished]: the session is unaffected.
-var ErrNotEstablished = errors.New("bgp: session is not established")
-
-// errFSMIdle is DeliverConn's refusal while the FSM is in Idle: no Connect
-// is in progress to take the connection. Peer distinguishes it from other
-// delivery errors: between attempts, Peer adopts the connection to end its
-// idle hold early, or answers it with Cease / Connection
-// Rejected itself when no hold is ready to take it.
-var errFSMIdle = errors.New("bgp: FSM is idle")
 
 // NewFSM validates the configuration and produces an FSM, in Idle. Nothing
 // runs until Connect.
@@ -450,7 +457,7 @@ func NewFSM(c FSMConfig) (*FSM, error) {
 		return nil, errors.New("bgp: local BGP identifier must be nonzero")
 	}
 
-	if id := c.Identity; id.PeerID != 0 && id.PeerID == id.LocalID && id.PeerASN == id.LocalASN {
+	if c.PeerID != 0 && c.PeerID == c.LocalID && c.PeerASN == c.LocalASN {
 		return nil, errors.New("bgp: an internal peer pinned to the local BGP identifier can never establish (RFC 6286)")
 	}
 
@@ -539,8 +546,8 @@ func NewFSM(c FSMConfig) (*FSM, error) {
 		connC:    make(chan *Conn, 1),
 	}
 
-	if h := c.OnMessage; h != nil {
-		f.tap = func(e MessageEvent) { h(f, e) }
+	if c.OnMessage != nil {
+		f.tap = func(e MessageEvent) { f.cfg.OnMessage(f, e) }
 	}
 
 	// Build and prove every OPEN the FSM can send. The only per-attempt
@@ -682,6 +689,14 @@ func (f *FSM) DeliverConn(c *Conn) error {
 	}
 }
 
+// running returns the channel which is closed while a Connect is in
+// progress: a receive blocks until the FSM leaves Idle.
+func (f *FSM) running() <-chan struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.runningC
+}
+
 // adopt marks c as the FSM's own: from here every message it frames is
 // reported to the tap. It runs at the three points a Conn enters the FSM,
 // a successful dial, delivery, and a seeded connect, before any goroutine
@@ -777,7 +792,10 @@ func (f *FSM) sendDemarcation(ctx context.Context, fam Family, sub RouteRefreshS
 		return errors.New("bgp: session did not negotiate the enhanced route refresh capability")
 	}
 
-	return f.send(ctx, fc, &RouteRefresh{Family: fam, Subtype: sub})
+	return f.send(ctx, fc, &RouteRefresh{
+		Family:  fam,
+		Subtype: sub,
+	})
 }
 
 // ResetSession ends the established session with a NOTIFICATION, leaving
@@ -814,12 +832,20 @@ func (f *FSM) ResetSession(ctx context.Context, cause *MessageError) error {
 		return ErrNotEstablished
 	}
 
-	n := &Notification{Code: NotificationCease, Subcode: SubcodeCeaseAdministrativeReset}
+	n := &Notification{
+		Code:    NotificationCease,
+		Subcode: SubcodeCeaseAdministrativeReset,
+	}
+
 	if cause != nil {
 		n = cause.Notification()
 	}
 
-	req := resetReq{n: n, done: make(chan struct{})}
+	req := resetReq{
+		n:    n,
+		done: make(chan struct{}),
+	}
+
 	select {
 	case fc.resetC <- req:
 	case <-fc.sessCtx.Done():
@@ -841,7 +867,11 @@ func (f *FSM) send(ctx context.Context, fc *fsmConn, m Message) error {
 	}
 
 	doneC := make(chan error, 1)
-	req := sendReq{m: m, doneC: doneC}
+	req := sendReq{
+		m:     m,
+		doneC: doneC,
+	}
+
 	select {
 	case fc.writer.sendC <- req:
 	case <-fc.sessCtx.Done():
@@ -884,11 +914,6 @@ func (f *FSM) shutdownCease(ctx context.Context) *Notification {
 	}
 }
 
-// implicitFamilies is the address family set of a speaker which advertises
-// no multiprotocol capabilities at all: the classic IPv4 unicast speaker of
-// RFC 4760. It is shared and must not be mutated.
-var implicitFamilies = []Family{{AFI: AFIIPv4, SAFI: SAFIUnicast}}
-
 // jittered scales d by a random factor in [0.75, 1.0], the jitter RFC 4271,
 // section 10 applies to the retry and keepalive timers so peers do not
 // synchronize.
@@ -900,7 +925,7 @@ func (f *FSM) jittered(d time.Duration) time.Duration {
 func (f *FSM) onClose(c Close) {
 	f.log.Info("session closed",
 		"notification", c.Notification, "local", c.Local, "err", c.Err)
-	if h := f.cfg.OnClose; h != nil {
-		h(f, c)
+	if f.cfg.OnClose != nil {
+		f.cfg.OnClose(f, c)
 	}
 }

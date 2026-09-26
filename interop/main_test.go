@@ -30,6 +30,7 @@ func TestMain(m *testing.M) {
 			log.Fatalf("interop: no FRR daemons found for the oracle; install FRR %s (the repository's nix dev shell provides it) or set $%s",
 				frrVersion, envFRR)
 		}
+
 		os.Setenv(envFRR, dir)
 	}
 

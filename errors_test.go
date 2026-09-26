@@ -12,19 +12,48 @@ func TestNotificationCodeString(t *testing.T) {
 		code NotificationCode
 		want string
 	}{
-		{code: NotificationMessageHeaderError, want: "Message Header Error"},
-		{code: NotificationOpenMessageError, want: "OPEN Message Error"},
-		{code: NotificationUpdateMessageError, want: "UPDATE Message Error"},
-		{code: NotificationHoldTimerExpired, want: "Hold Timer Expired"},
-		{code: NotificationFSMError, want: "Finite State Machine Error"},
-		{code: NotificationCease, want: "Cease"},
-		{code: NotificationRouteRefreshMessageError, want: "ROUTE-REFRESH Message Error"},
-		{code: NotificationSendHoldTimerExpired, want: "Send Hold Timer Expired"},
-		{code: NotificationCode(255), want: "unknown(255)"},
+		{
+			code: NotificationMessageHeaderError,
+			want: "Message Header Error",
+		},
+		{
+			code: NotificationOpenMessageError,
+			want: "OPEN Message Error",
+		},
+		{
+			code: NotificationUpdateMessageError,
+			want: "UPDATE Message Error",
+		},
+		{
+			code: NotificationHoldTimerExpired,
+			want: "Hold Timer Expired",
+		},
+		{
+			code: NotificationFSMError,
+			want: "Finite State Machine Error",
+		},
+		{
+			code: NotificationCease,
+			want: "Cease",
+		},
+		{
+			code: NotificationRouteRefreshMessageError,
+			want: "ROUTE-REFRESH Message Error",
+		},
+		{
+			code: NotificationSendHoldTimerExpired,
+			want: "Send Hold Timer Expired",
+		},
+		{
+			code: NotificationCode(255),
+			want: "unknown(255)",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
+
 			if got := tt.code.String(); got != tt.want {
 				t.Fatalf("unexpected string: got %q, want %q", got, tt.want)
 			}
@@ -39,18 +68,54 @@ func TestSubcodeStringCease(t *testing.T) {
 		subcode uint8
 		want    string
 	}{
-		{subcode: SubcodeCeaseMaximumPrefixesReached, want: "Maximum Number of Prefixes Reached"},
-		{subcode: SubcodeCeaseAdministrativeShutdown, want: "Administrative Shutdown"},
-		{subcode: SubcodeCeasePeerDeconfigured, want: "Peer De-configured"},
-		{subcode: SubcodeCeaseAdministrativeReset, want: "Administrative Reset"},
-		{subcode: SubcodeCeaseConnectionRejected, want: "Connection Rejected"},
-		{subcode: SubcodeCeaseOtherConfigurationChange, want: "Other Configuration Change"},
-		{subcode: SubcodeCeaseConnectionCollisionResolution, want: "Connection Collision Resolution"},
-		{subcode: SubcodeCeaseOutOfResources, want: "Out of Resources"},
-		{subcode: SubcodeCeaseHardReset, want: "Hard Reset"},
-		{subcode: SubcodeCeaseBFDDown, want: "BFD Down"},
-		{subcode: 0, want: "Unspecific"},
-		{subcode: 11, want: "unknown(11)"},
+		{
+			subcode: SubcodeCeaseMaximumPrefixesReached,
+			want:    "Maximum Number of Prefixes Reached",
+		},
+		{
+			subcode: SubcodeCeaseAdministrativeShutdown,
+			want:    "Administrative Shutdown",
+		},
+		{
+			subcode: SubcodeCeasePeerDeconfigured,
+			want:    "Peer De-configured",
+		},
+		{
+			subcode: SubcodeCeaseAdministrativeReset,
+			want:    "Administrative Reset",
+		},
+		{
+			subcode: SubcodeCeaseConnectionRejected,
+			want:    "Connection Rejected",
+		},
+		{
+			subcode: SubcodeCeaseOtherConfigurationChange,
+			want:    "Other Configuration Change",
+		},
+		{
+			subcode: SubcodeCeaseConnectionCollisionResolution,
+			want:    "Connection Collision Resolution",
+		},
+		{
+			subcode: SubcodeCeaseOutOfResources,
+			want:    "Out of Resources",
+		},
+		{
+			subcode: SubcodeCeaseHardReset,
+			want:    "Hard Reset",
+		},
+		{
+			subcode: SubcodeCeaseBFDDown,
+			want:    "BFD Down",
+		},
+		{
+			subcode: 0,
+			want:    "Unspecific",
+		},
+		{
+			subcode: 11,
+			want:    "unknown(11)",
+		},
 	}
 
 	for _, tt := range tests {
@@ -71,9 +136,18 @@ func TestSubcodeStringRouteRefresh(t *testing.T) {
 		subcode uint8
 		want    string
 	}{
-		{subcode: SubcodeInvalidMessageLength, want: "Invalid Message Length"},
-		{subcode: 0, want: "Unspecific"},
-		{subcode: 2, want: "unknown(2)"},
+		{
+			subcode: SubcodeInvalidMessageLength,
+			want:    "Invalid Message Length",
+		},
+		{
+			subcode: 0,
+			want:    "Unspecific",
+		},
+		{
+			subcode: 2,
+			want:    "unknown(2)",
+		},
 	}
 
 	for _, tt := range tests {
@@ -156,8 +230,11 @@ func TestMessageErrorDataCloned(t *testing.T) {
 	binary.BigEndian.PutUint16(b[markerLen:], headerLen+1)
 
 	_, err := ParseMessage(b)
-	merr := wantMessageError(t, err, NotificationMessageHeaderError,
-		SubcodeBadMessageLength, []byte{0x00, headerLen + 1})
+	merr := wantMessageError(t, err, &Notification{
+		Code:    NotificationMessageHeaderError,
+		Subcode: SubcodeBadMessageLength,
+		Data:    []byte{0x00, headerLen + 1},
+	})
 
 	// Scrambling the input must not disturb the error's diagnostic data.
 	for i := range b {

@@ -2,17 +2,17 @@
 
 // Package interop tests github.com/mdlayher/bgp against a real BGP
 // implementation: FRRouting, the suite's oracle, hosted as native
-// daemons inside nested network namespaces (Linux only; see netns.go).
-// Nothing beyond unprivileged user namespaces is required, but
-// iproute2 must be on $PATH and the daemons — zebra and bgpd, both
-// required for the full suite — must be exactly FRR frrVersion: see
-// the constant. The repository's nix dev shell provides all of it:
+// daemons inside nested network namespaces. It runs only on Linux: see
+// netns.go. Nothing beyond unprivileged user namespaces is required,
+// but iproute2 must be on $PATH, and the daemons must be exactly FRR
+// frrVersion: see the constant. Both zebra and bgpd are required for
+// the full suite. The repository's nix dev shell provides all of it:
 //
 //	nix develop -c go test -tags interop -race ./interop
 //
-// $BGP_INTEROP_FRR names the daemon directory explicitly (e.g.
-// /usr/lib/frr, or a Nix store path's libexec/frr); without it, the
-// suite discovers the daemons in the usual install locations — see
+// $BGP_INTEROP_FRR names the daemon directory explicitly, such as
+// /usr/lib/frr or a Nix store path's libexec/frr. Without it, the
+// suite discovers the daemons in the usual install locations: see
 // detectFRR.
 //
 // The suite is compiled only with the interop build tag:
@@ -24,9 +24,9 @@
 // worse than a red one.
 //
 // An establishment wait outlasts the library's connect retry cadence
-// on purpose (see establishTimeout), so a run in which several of them
-// fire wants a package timeout above go test's ten minute default; CI
-// passes -timeout 20m.
+// on purpose, as establishTimeout explains, so a run in which several
+// of them fire wants a package timeout above go test's ten minute
+// default. CI passes -timeout 20m.
 //
 // When $BGP_INTEROP_LOGDIR is set, each FRR instance's logs are saved
 // there on teardown; a failed test additionally dumps them into the
@@ -58,13 +58,11 @@ const (
 	// The host's own addresses on the network: the addresses the
 	// hosted router dials to reach a library speaker running in the
 	// test binary.
-	hostV4 = "192.168.240.1"
-	hostV6 = "fd00:2026:8::1"
+	hostV4, hostV6 = "192.168.240.1", "fd00:2026:8::1"
 
 	// The FRR instance's static addresses. Tests run serially, so a
 	// single pair serves every scenario.
-	frrV4 = "192.168.240.10"
-	frrV6 = "fd00:2026:8::10"
+	frrV4, frrV6 = "192.168.240.10", "fd00:2026:8::10"
 )
 
 // The suite's two deadlines, each stated once here rather than

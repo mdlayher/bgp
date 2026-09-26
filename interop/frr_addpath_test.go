@@ -32,14 +32,24 @@ var nextHopV4Alt = netip.MustParseAddr("192.168.240.2")
 // path disappears from FRR's table and from B. Both speakers' views of
 // the negotiation are asserted against FRR's.
 func TestFRRAddPath(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	const libASNB uint32 = 64498
 
 	f := startFRR(t, frrConfig{
 		ASN:      frrASN,
 		RouterID: frrRouterID,
 		Neighbors: []frrNeighbor{
-			{Addr: hostAddr4, ASN: libASN},
-			{Addr: hostAddr6, ASN: libASNB, AddPathTxAllPaths: true},
+			{
+				Addr: hostAddr4,
+				ASN:  libASN,
+			},
+			{
+				Addr:              hostAddr6,
+				ASN:               libASNB,
+				AddPathTxAllPaths: true,
+			},
 		},
 	})
 
@@ -53,19 +63,31 @@ func TestFRRAddPath(t *testing.T) {
 		PeerASN:  frrASN,
 		Families: families,
 		AddPath: []bgp.AddPathFamily{
-			{Family: v4Unicast, Receive: true},
-			{Family: v6Unicast, Receive: true},
+			{
+				Family:  v4Unicast,
+				Receive: true,
+			},
+			{
+				Family:  v6Unicast,
+				Receive: true,
+			},
 		},
 		OnUpdate: paths.handler,
 	})
 	sB := awaitSession(t, estabB)
 
 	wantB := []bgp.AddPathFamily{
-		{Family: v4Unicast, Receive: true},
-		{Family: v6Unicast, Receive: true},
+		{
+			Family:  v4Unicast,
+			Receive: true,
+		},
+		{
+			Family:  v6Unicast,
+			Receive: true,
+		},
 	}
-	if got := sB.AddPath; !slices.Equal(got, wantB) {
-		t.Fatalf("B negotiated unexpected add-path: got %+v, want %+v", got, wantB)
+	if d := diff(t, wantB, sB.AddPath); d != "" {
+		t.Fatalf("B negotiated unexpected add-path (-want +got):\n%s", d)
 	}
 
 	// A configures both directions for IPv4 unicast only. FRR
@@ -79,18 +101,31 @@ func TestFRRAddPath(t *testing.T) {
 		LocalID:  libID,
 		PeerASN:  frrASN,
 		Families: families,
-		AddPath:  []bgp.AddPathFamily{{Family: v4Unicast, Send: true, Receive: true}},
+		AddPath: []bgp.AddPathFamily{{
+			Family:  v4Unicast,
+			Send:    true,
+			Receive: true,
+		}},
 	})
 	sA := awaitSession(t, estabA)
 
-	wantA := []bgp.AddPathFamily{{Family: v4Unicast, Send: true}}
-	if got := sA.AddPath; !slices.Equal(got, wantA) {
-		t.Fatalf("A negotiated unexpected add-path: got %+v, want %+v", got, wantA)
+	wantA := []bgp.AddPathFamily{{
+		Family: v4Unicast,
+		Send:   true,
+	}}
+	if d := diff(t, wantA, sA.AddPath); d != "" {
+		t.Fatalf("A negotiated unexpected add-path (-want +got):\n%s", d)
 	}
 
 	// FRR's view of both negotiations, from its side of each session.
 	nA := f.awaitEstablished(t, hostAddr4)
-	if got, want := nA.Capabilities.AddPath["ipv4Unicast"], (frrAddPathCapJSON{TxReceived: true, RxAdvertised: true, RxReceived: true}); got != want {
+	wantCapA := frrAddPathCapJSON{
+		TxReceived:   true,
+		RxAdvertised: true,
+		RxReceived:   true,
+	}
+
+	if got, want := nA.Capabilities.AddPath["ipv4Unicast"], wantCapA; got != want {
 		t.Errorf("FRR reports unexpected IPv4 unicast add-path with A: got %+v, want %+v", got, want)
 	}
 
@@ -99,8 +134,14 @@ func TestFRRAddPath(t *testing.T) {
 	}
 
 	nB := f.awaitEstablished(t, hostAddr6)
+	wantCapB := frrAddPathCapJSON{
+		TxAdvertised: true,
+		RxAdvertised: true,
+		RxReceived:   true,
+	}
+
 	for _, family := range []string{"ipv4Unicast", "ipv6Unicast"} {
-		if got, want := nB.Capabilities.AddPath[family], (frrAddPathCapJSON{TxAdvertised: true, RxAdvertised: true, RxReceived: true}); got != want {
+		if got, want := nB.Capabilities.AddPath[family], wantCapB; got != want {
 			t.Errorf("FRR reports unexpected %s add-path with B: got %+v, want %+v", family, got, want)
 		}
 	}
@@ -113,8 +154,16 @@ func TestFRRAddPath(t *testing.T) {
 	defer cancel()
 
 	sends := []sentPath{
-		{id: 1, nextHop: hostAddr4, community: bgp.NewCommunity(uint16(libASN), 1)},
-		{id: 2, nextHop: nextHopV4Alt, community: bgp.NewCommunity(uint16(libASN), 2)},
+		{
+			id:        1,
+			nextHop:   hostAddr4,
+			community: bgp.NewCommunity(uint16(libASN), 1),
+		},
+		{
+			id:        2,
+			nextHop:   nextHopV4Alt,
+			community: bgp.NewCommunity(uint16(libASN), 2),
+		},
 	}
 
 	for _, s := range sends {
@@ -130,7 +179,10 @@ func TestFRRAddPath(t *testing.T) {
 
 		if err := pA.SendUpdate(ctx, &bgp.Update{
 			Attributes: attrs,
-			NLRIPaths:  bgp.PathPrefixes{{ID: s.id, Prefix: prefixV4A}},
+			NLRIPaths: bgp.PathPrefixes{{
+				ID:     s.id,
+				Prefix: prefixV4A,
+			}},
 		}); err != nil {
 			t.Fatalf("failed to send path %d: %v", s.id, err)
 		}
@@ -154,26 +206,25 @@ func TestFRRAddPath(t *testing.T) {
 	// selection, after a path lands in the table, and B having received
 	// both paths proves that has happened.
 	txIDs := make(map[bgp.Community]uint32)
-	for _, p := range f.awaitPrefixPaths(t, "ipv4", prefixV4A, 2) {
+	for _, p := range f.awaitPrefixPaths(t, prefixV4A, 2) {
 		i := slices.IndexFunc(sends, func(s sentPath) bool { return s.id == p.AddPathRxID })
 		if i < 0 {
 			t.Fatalf("FRR holds a path with an identifier A never sent: %+v", p)
 		}
 
-		s := sends[i]
 		if !p.Valid {
-			t.Errorf("FRR considers path %d invalid: %+v", s.id, p)
+			t.Errorf("FRR considers path %d invalid: %+v", sends[i].id, p)
 		}
 
-		if got, want := p.Community.List, []string{s.community.String()}; !slices.Equal(got, want) {
-			t.Errorf("unexpected communities for path %d: got %v, want %v", s.id, got, want)
+		if d := diff(t, []string{sends[i].community.String()}, p.Community.List); d != "" {
+			t.Errorf("unexpected communities for path %d (-want +got):\n%s", sends[i].id, d)
 		}
 
-		if !slices.ContainsFunc(p.Nexthops, func(n frrNexthopJSON) bool { return n.IP == s.nextHop.String() }) {
-			t.Errorf("unexpected next hops for path %d: got %+v, want %s", s.id, p.Nexthops, s.nextHop)
+		if !slices.ContainsFunc(p.Nexthops, func(n frrNexthopJSON) bool { return n.IP == sends[i].nextHop.String() }) {
+			t.Errorf("unexpected next hops for path %d: got %+v, want %s", sends[i].id, p.Nexthops, sends[i].nextHop)
 		}
 
-		txIDs[s.community] = p.AddPathTxID
+		txIDs[sends[i].community] = p.AddPathTxID
 	}
 
 	if len(txIDs) != 2 {
@@ -196,8 +247,8 @@ func TestFRRAddPath(t *testing.T) {
 			t.Errorf("unexpected identifier for %s path: got %d, want %d", p.Communities[0], p.ID, want)
 		}
 
-		if got, want := p.ASPath, []uint32{frrASN, libASN}; !slices.Equal(got, want) {
-			t.Errorf("unexpected AS path: got %v, want %v", got, want)
+		if d := diff(t, []uint32{frrASN, libASN}, p.ASPath); d != "" {
+			t.Errorf("unexpected AS path (-want +got):\n%s", d)
 		}
 
 		if got, want := p.NextHop, f.Addr; got != want {
@@ -207,20 +258,20 @@ func TestFRRAddPath(t *testing.T) {
 
 	// A withdraws the second path by identifier. B receives a withdraw
 	// for exactly its identifier, and FRR drops exactly that one.
-	withdrawn := sends[1]
 	if err := pA.SendUpdate(ctx, &bgp.Update{
-		WithdrawnPaths: bgp.PathPrefixes{{ID: withdrawn.id, Prefix: prefixV4A}},
+		WithdrawnPaths: bgp.PathPrefixes{{
+			ID:     sends[1].id,
+			Prefix: prefixV4A,
+		}},
 	}); err != nil {
-		t.Fatalf("failed to withdraw path %d: %v", withdrawn.id, err)
+		t.Fatalf("failed to withdraw path %d: %v", sends[1].id, err)
 	}
 
-	w := paths.await(t, prefixV4A, true)
-	if got, want := w.ID, txIDs[withdrawn.community]; got != want {
+	if got, want := paths.await(t, prefixV4A, true).ID, txIDs[sends[1].community]; got != want {
 		t.Errorf("B received a withdraw for the wrong path: got identifier %d, want %d", got, want)
 	}
 
-	remaining := f.awaitPrefixPaths(t, "ipv4", prefixV4A, 1)
-	if got, want := remaining[0].AddPathRxID, sends[0].id; got != want {
+	if got, want := f.awaitPrefixPaths(t, prefixV4A, 1)[0].AddPathRxID, sends[0].id; got != want {
 		t.Errorf("FRR kept the wrong path: got identifier %d, want %d", got, want)
 	}
 }
@@ -231,10 +282,17 @@ func TestFRRAddPath(t *testing.T) {
 // identifier FRR reports sending, and that the family's End-of-RIB
 // marker still decodes on an add-path session.
 func TestFRRAddPathMultiprotocol(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	f := startFRR(t, frrConfig{
-		ASN:        frrASN,
-		RouterID:   frrRouterID,
-		Neighbors:  []frrNeighbor{{Addr: hostAddr4, ASN: libASN, AddPathTxAllPaths: true}},
+		ASN:      frrASN,
+		RouterID: frrRouterID,
+		Neighbors: []frrNeighbor{{
+			Addr:              hostAddr4,
+			ASN:               libASN,
+			AddPathTxAllPaths: true,
+		}},
 		NetworksV6: []netip.Prefix{prefixV6A},
 	})
 
@@ -246,14 +304,20 @@ func TestFRRAddPathMultiprotocol(t *testing.T) {
 		LocalID:  libID,
 		PeerASN:  frrASN,
 		Families: families,
-		AddPath:  []bgp.AddPathFamily{{Family: v6Unicast, Receive: true}},
+		AddPath: []bgp.AddPathFamily{{
+			Family:  v6Unicast,
+			Receive: true,
+		}},
 		OnUpdate: paths.handler,
 	})
 	s := awaitSession(t, estab)
 
-	want := []bgp.AddPathFamily{{Family: v6Unicast, Receive: true}}
-	if got := s.AddPath; !slices.Equal(got, want) {
-		t.Fatalf("negotiated unexpected add-path: got %+v, want %+v", got, want)
+	want := []bgp.AddPathFamily{{
+		Family:  v6Unicast,
+		Receive: true,
+	}}
+	if d := diff(t, want, s.AddPath); d != "" {
+		t.Fatalf("negotiated unexpected add-path (-want +got):\n%s", d)
 	}
 
 	p := paths.await(t, prefixV6A, false)
@@ -265,13 +329,12 @@ func TestFRRAddPathMultiprotocol(t *testing.T) {
 		t.Errorf("unexpected next hop: got %s, want %s", got, want)
 	}
 
-	if got, want := p.ASPath, []uint32{frrASN}; !slices.Equal(got, want) {
-		t.Errorf("unexpected AS path: got %v, want %v", got, want)
+	if d := diff(t, []uint32{frrASN}, p.ASPath); d != "" {
+		t.Errorf("unexpected AS path (-want +got):\n%s", d)
 	}
 
 	// FRR's own accounting of the identifier it sent, from its table.
-	frrPaths := f.awaitPrefixPaths(t, "ipv6", prefixV6A, 1)
-	if got, want := p.ID, frrPaths[0].AddPathTxID; got != want {
+	if got, want := p.ID, f.awaitPrefixPaths(t, prefixV6A, 1)[0].AddPathTxID; got != want {
 		t.Errorf("unexpected identifier: got %d, FRR reports sending %d", got, want)
 	}
 

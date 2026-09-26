@@ -20,8 +20,8 @@ const peerTimeout = 10 * time.Second
 func TestNewPeerErrors(t *testing.T) {
 	t.Parallel()
 
-	// dialAddr is a known-good remote address for the built-in Dialer path;
-	// the addressing error cases vary NewPeer's raddr instead.
+	// dialAddr is a known-good remote address for the built-in Dialer path.
+	// TestPeerAddrRequiredToDial covers a missing one.
 	dialAddr := netip.MustParseAddr("192.0.2.2")
 
 	// valid mutates a known-good configuration into an invalid one.
@@ -75,7 +75,10 @@ func TestNewPeerErrors(t *testing.T) {
 			name: "multiprotocol capability",
 			c: valid(func(c *PeerConfig) {
 				c.Capabilities = []Capability{
-					MultiprotocolCapability(Family{AFI: AFIIPv6, SAFI: SAFIUnicast}),
+					MultiprotocolCapability(Family{
+						AFI:  AFIIPv6,
+						SAFI: SAFIUnicast,
+					}),
 				}
 			}),
 		},
@@ -100,8 +103,11 @@ func TestNewPeerErrors(t *testing.T) {
 			c: valid(func(c *PeerConfig) {
 				c.Capabilities = []Capability{
 					must(AddPathCapability(AddPathFamily{
-						Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast},
-						Send:   true,
+						Family: Family{
+							AFI:  AFIIPv4,
+							SAFI: SAFIUnicast,
+						},
+						Send: true,
 					})),
 				}
 			}),
@@ -110,18 +116,31 @@ func TestNewPeerErrors(t *testing.T) {
 			name: "add-path family not prefix shaped",
 			c: valid(func(c *PeerConfig) {
 				c.AddPath = []AddPathFamily{{
-					Family: Family{AFI: AFIL2VPN, SAFI: SAFIEVPN},
-					Send:   true,
+					Family: Family{
+						AFI:  AFIL2VPN,
+						SAFI: SAFIEVPN,
+					},
+					Send: true,
 				}}
 			}),
 		},
 		{
 			name: "add-path duplicate family",
 			c: valid(func(c *PeerConfig) {
-				f := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+				f := Family{
+					AFI:  AFIIPv4,
+					SAFI: SAFIUnicast,
+				}
+
 				c.AddPath = []AddPathFamily{
-					{Family: f, Send: true},
-					{Family: f, Receive: true},
+					{
+						Family: f,
+						Send:   true,
+					},
+					{
+						Family:  f,
+						Receive: true,
+					},
 				}
 			}),
 		},
@@ -129,7 +148,10 @@ func TestNewPeerErrors(t *testing.T) {
 			name: "add-path no direction",
 			c: valid(func(c *PeerConfig) {
 				c.AddPath = []AddPathFamily{{
-					Family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast},
+					Family: Family{
+						AFI:  AFIIPv4,
+						SAFI: SAFIUnicast,
+					},
 				}}
 			}),
 		},
@@ -206,41 +228,46 @@ func TestNewPeerErrors(t *testing.T) {
 			}
 		})
 	}
+}
 
-	// The addressing error cases vary addr against a valid configuration:
-	// addressing is NewPeer's parameter, not the config's, and the port is
-	// the Dialer's, so an address is all there is to get wrong.
-	t.Run("no peer address", func(t *testing.T) {
-		t.Parallel()
+// TestNewPeerUnaddressed verifies the peers which may leave NewPeer's addr
+// zero: a passive peer never dials, and a DialFunc transport addresses its
+// peer by means of its own. Without an address, a peer accepts any
+// delivered connection, and the negotiation pins are its identity checks.
+func TestNewPeerUnaddressed(t *testing.T) {
+	t.Parallel()
 
-		if _, err := NewPeer(netip.Addr{}, valid(func(c *PeerConfig) {})); err == nil {
-			t.Fatal("expected an error, but none occurred")
-		}
-	})
+	tests := []struct {
+		name string
+		c    PeerConfig
+	}{
+		{
+			name: "passive",
+			c: PeerConfig{
+				LocalASN: 64496,
+				LocalID:  MustParseIdentifier("192.0.2.1"),
+				Passive:  true,
+			},
+		},
+		{
+			name: "dial func",
+			c: PeerConfig{
+				LocalASN: 64496,
+				LocalID:  MustParseIdentifier("192.0.2.1"),
+				DialFunc: stubDialFunc,
+			},
+		},
+	}
 
-	t.Run("passive unaddressed", func(t *testing.T) {
-		t.Parallel()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-		// A passive peer never dials, so it needs no address: without one
-		// it accepts any delivered connection's address, and the
-		// negotiation pins are its identity checks.
-		c := valid(func(c *PeerConfig) { c.Passive = true })
-		if _, err := NewPeer(netip.Addr{}, c); err != nil {
-			t.Fatalf("failed to create passive peer: %v", err)
-		}
-	})
-
-	// A DialFunc transport addresses its peer by any means of its own, so
-	// raddr may be zero entirely even though the peer dials: nothing in
-	// this package dials it.
-	t.Run("dial func unaddressed", func(t *testing.T) {
-		t.Parallel()
-
-		c := valid(func(c *PeerConfig) { c.DialFunc = stubDialFunc })
-		if _, err := NewPeer(netip.Addr{}, c); err != nil {
-			t.Fatalf("failed to create DialFunc peer: %v", err)
-		}
-	})
+			if _, err := NewPeer(netip.Addr{}, tt.c); err != nil {
+				t.Fatalf("failed to create peer: %v", err)
+			}
+		})
+	}
 }
 
 func TestPeerRunAlreadyRunning(t *testing.T) {
@@ -315,8 +342,15 @@ func TestPeerOpenSent(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
-		v6u := Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+		v4u := Family{
+			AFI:  AFIIPv4,
+			SAFI: SAFIUnicast,
+		}
+
+		v6u := Family{
+			AFI:  AFIIPv6,
+			SAFI: SAFIUnicast,
+		}
 
 		r := newPipeRig(t, PeerConfig{
 			Families: []Family{v4u, v6u},
@@ -347,8 +381,15 @@ func TestPeerEstablished(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
-		v6u := Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+		v4u := Family{
+			AFI:  AFIIPv4,
+			SAFI: SAFIUnicast,
+		}
+
+		v6u := Family{
+			AFI:  AFIIPv6,
+			SAFI: SAFIUnicast,
+		}
 
 		r := newPipeRig(t, PeerConfig{
 			PeerASN:  64497,
@@ -400,16 +441,30 @@ func TestPeerAddPath(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
-		v6u := Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+		v4u := Family{
+			AFI:  AFIIPv4,
+			SAFI: SAFIUnicast,
+		}
+
+		v6u := Family{
+			AFI:  AFIIPv6,
+			SAFI: SAFIUnicast,
+		}
 
 		updateC := make(chan *Update, 4)
 		r := newPipeRig(t, PeerConfig{
 			PeerASN:  64497,
 			Families: []Family{v4u, v6u},
 			AddPath: []AddPathFamily{
-				{Family: v4u, Send: true, Receive: true},
-				{Family: v6u, Receive: true},
+				{
+					Family:  v4u,
+					Send:    true,
+					Receive: true,
+				},
+				{
+					Family:  v6u,
+					Receive: true,
+				},
 			},
 			OnUpdate: func(_ context.Context, _ *Peer, u *Update, _ *UpdateDiagnostics) error {
 				updateC <- u
@@ -430,8 +485,15 @@ func TestPeerAddPath(t *testing.T) {
 				MultiprotocolCapability(v4u),
 				MultiprotocolCapability(v6u),
 				must(AddPathCapability(
-					AddPathFamily{Family: v4u, Send: true, Receive: true},
-					AddPathFamily{Family: v6u, Send: true},
+					AddPathFamily{
+						Family:  v4u,
+						Send:    true,
+						Receive: true,
+					},
+					AddPathFamily{
+						Family: v6u,
+						Send:   true,
+					},
 				)),
 			},
 		}
@@ -440,9 +502,17 @@ func TestPeerAddPath(t *testing.T) {
 
 		sess := recv(t, r.estC, "session establishment")
 		wantAddPath := []AddPathFamily{
-			{Family: v4u, Send: true, Receive: true},
-			{Family: v6u, Receive: true},
+			{
+				Family:  v4u,
+				Send:    true,
+				Receive: true,
+			},
+			{
+				Family:  v6u,
+				Receive: true,
+			},
 		}
+
 		if d := diff(t, wantAddPath, sess.AddPath); d != "" {
 			t.Fatalf("unexpected negotiated add-path (-want +got):\n%s", d)
 		}
@@ -451,8 +521,14 @@ func TestPeerAddPath(t *testing.T) {
 		// the top level IPv4 unicast field, and an IPv6 multiprotocol
 		// attribute.
 		nlri := PathPrefixes{
-			{ID: 1, Prefix: netip.MustParsePrefix("2001:db8:1::/48")},
-			{ID: 2, Prefix: netip.MustParsePrefix("2001:db8:1::/48")},
+			{
+				ID:     1,
+				Prefix: netip.MustParsePrefix("2001:db8:1::/48"),
+			},
+			{
+				ID:     2,
+				Prefix: netip.MustParsePrefix("2001:db8:1::/48"),
+			},
 		}
 
 		// The well-known mandatory attributes ride along, so the UPDATE
@@ -474,8 +550,14 @@ func TestPeerAddPath(t *testing.T) {
 		sent := &Update{
 			Attributes: mp,
 			NLRIPaths: PathPrefixes{
-				{ID: 1, Prefix: netip.MustParsePrefix("198.51.100.0/24")},
-				{ID: 2, Prefix: netip.MustParsePrefix("198.51.100.0/24")},
+				{
+					ID:     1,
+					Prefix: netip.MustParsePrefix("198.51.100.0/24"),
+				},
+				{
+					ID:     2,
+					Prefix: netip.MustParsePrefix("198.51.100.0/24"),
+				},
 			},
 		}
 
@@ -510,7 +592,10 @@ func TestPeerAddPath(t *testing.T) {
 func TestPeerGracefulRestart(t *testing.T) {
 	t.Parallel()
 
-	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+	v4u := Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIUnicast,
+	}
 
 	for _, restarting := range []bool{false, true} {
 		t.Run(fmt.Sprintf("restarting=%t", restarting), func(t *testing.T) {
@@ -523,7 +608,10 @@ func TestPeerGracefulRestart(t *testing.T) {
 						RestartTime:         120 * time.Second,
 						NotificationSupport: true,
 						Families: []GracefulRestartFamily{
-							{Family: v4u, ForwardingPreserved: true},
+							{
+								Family:              v4u,
+								ForwardingPreserved: true,
+							},
 						},
 						Restarting: func() bool { return restarting },
 					},
@@ -543,7 +631,10 @@ func TestPeerGracefulRestart(t *testing.T) {
 							NotificationSupport: true,
 							RestartTime:         120 * time.Second,
 							Families: []GracefulRestartFamily{
-								{Family: v4u, ForwardingPreserved: true},
+								{
+									Family:              v4u,
+									ForwardingPreserved: true,
+								},
 							},
 						})),
 					},
@@ -559,7 +650,10 @@ func TestPeerGracefulRestart(t *testing.T) {
 					Restarting:  !restarting,
 					RestartTime: 90 * time.Second,
 					Families: []GracefulRestartFamily{
-						{Family: v4u, ForwardingPreserved: true},
+						{
+							Family:              v4u,
+							ForwardingPreserved: true,
+						},
 					},
 				}
 
@@ -607,8 +701,15 @@ func TestPeerLongLivedGracefulRestart(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		var (
-			v4u = Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
-			v6u = Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+			v4u = Family{
+				AFI:  AFIIPv4,
+				SAFI: SAFIUnicast,
+			}
+
+			v6u = Family{
+				AFI:  AFIIPv6,
+				SAFI: SAFIUnicast,
+			}
 		)
 
 		r := newPipeRig(t, PeerConfig{
@@ -616,14 +717,27 @@ func TestPeerLongLivedGracefulRestart(t *testing.T) {
 			GracefulRestart: &GracefulRestartConfig{
 				RestartTime: 120 * time.Second,
 				Families: []GracefulRestartFamily{
-					{Family: v4u, ForwardingPreserved: true},
-					{Family: v6u, ForwardingPreserved: true},
+					{
+						Family:              v4u,
+						ForwardingPreserved: true,
+					},
+					{
+						Family:              v6u,
+						ForwardingPreserved: true,
+					},
 				},
 			},
 			LongLivedGracefulRestart: &LongLivedGracefulRestart{
 				Families: []LongLivedGracefulRestartFamily{
-					{Family: v4u, ForwardingPreserved: true, StaleTime: time.Hour},
-					{Family: v6u, StaleTime: 2 * time.Hour},
+					{
+						Family:              v4u,
+						ForwardingPreserved: true,
+						StaleTime:           time.Hour,
+					},
+					{
+						Family:    v6u,
+						StaleTime: 2 * time.Hour,
+					},
 				},
 			},
 		})
@@ -641,14 +755,27 @@ func TestPeerLongLivedGracefulRestart(t *testing.T) {
 				must(GracefulRestartCapability(GracefulRestart{
 					RestartTime: 120 * time.Second,
 					Families: []GracefulRestartFamily{
-						{Family: v4u, ForwardingPreserved: true},
-						{Family: v6u, ForwardingPreserved: true},
+						{
+							Family:              v4u,
+							ForwardingPreserved: true,
+						},
+						{
+							Family:              v6u,
+							ForwardingPreserved: true,
+						},
 					},
 				})),
 				must(LongLivedGracefulRestartCapability(LongLivedGracefulRestart{
 					Families: []LongLivedGracefulRestartFamily{
-						{Family: v4u, ForwardingPreserved: true, StaleTime: time.Hour},
-						{Family: v6u, StaleTime: 2 * time.Hour},
+						{
+							Family:              v4u,
+							ForwardingPreserved: true,
+							StaleTime:           time.Hour,
+						},
+						{
+							Family:    v6u,
+							StaleTime: 2 * time.Hour,
+						},
 					},
 				})),
 			},
@@ -665,15 +792,29 @@ func TestPeerLongLivedGracefulRestart(t *testing.T) {
 		peerGR := GracefulRestart{
 			RestartTime: 120 * time.Second,
 			Families: []GracefulRestartFamily{
-				{Family: v4u, ForwardingPreserved: true},
-				{Family: v6u, ForwardingPreserved: true},
+				{
+					Family:              v4u,
+					ForwardingPreserved: true,
+				},
+				{
+					Family:              v6u,
+					ForwardingPreserved: true,
+				},
 			},
 		}
 
 		peerLLGR := LongLivedGracefulRestart{
 			Families: []LongLivedGracefulRestartFamily{
-				{Family: v4u, ForwardingPreserved: true, StaleTime: 24 * time.Hour},
-				{Family: v6u, ForwardingPreserved: true, StaleTime: 24 * time.Hour},
+				{
+					Family:              v4u,
+					ForwardingPreserved: true,
+					StaleTime:           24 * time.Hour,
+				},
+				{
+					Family:              v6u,
+					ForwardingPreserved: true,
+					StaleTime:           24 * time.Hour,
+				},
 			},
 		}
 
@@ -758,7 +899,10 @@ func TestPeerOpenRejected(t *testing.T) {
 		Data: binary.BigEndian.AppendUint32(nil, 64496),
 	}))
 
-	v6u := Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+	v6u := Family{
+		AFI:  AFIIPv6,
+		SAFI: SAFIUnicast,
+	}
 
 	tests := []struct {
 		name string
@@ -768,7 +912,12 @@ func TestPeerOpenRejected(t *testing.T) {
 	}{
 		{
 			name: "bad version",
-			open: rawMessage(MessageTypeOpen, rawOpenBody(3, 64497, 90, 0xc0000202)),
+			open: rawMessage(MessageTypeOpen, rawOpenBody(rawOpen{
+				version: 3,
+				asn:     64497,
+				hold:    90,
+				id:      0xc0000202,
+			})),
 			want: &Notification{
 				Code:    NotificationOpenMessageError,
 				Subcode: SubcodeUnsupportedVersionNumber,
@@ -777,7 +926,12 @@ func TestPeerOpenRejected(t *testing.T) {
 		},
 		{
 			name: "hold time one second",
-			open: rawMessage(MessageTypeOpen, rawOpenBody(4, 64497, 1, 0xc0000202)),
+			open: rawMessage(MessageTypeOpen, rawOpenBody(rawOpen{
+				version: 4,
+				asn:     64497,
+				hold:    1,
+				id:      0xc0000202,
+			})),
 			want: &Notification{
 				Code:    NotificationOpenMessageError,
 				Subcode: SubcodeUnacceptableHoldTime,
@@ -785,7 +939,11 @@ func TestPeerOpenRejected(t *testing.T) {
 		},
 		{
 			name: "hold time zero",
-			open: mustMessage(t, &Open{ASN: 64497, HoldTime: 0, ID: MustParseIdentifier("192.0.2.2")}),
+			open: mustMessage(t, &Open{
+				ASN:      64497,
+				HoldTime: 0,
+				ID:       MustParseIdentifier("192.0.2.2"),
+			}),
 			want: &Notification{
 				Code:    NotificationOpenMessageError,
 				Subcode: SubcodeUnacceptableHoldTime,
@@ -793,7 +951,12 @@ func TestPeerOpenRejected(t *testing.T) {
 		},
 		{
 			name: "zero identifier",
-			open: rawMessage(MessageTypeOpen, rawOpenBody(4, 64497, 90, 0)),
+			open: rawMessage(MessageTypeOpen, rawOpenBody(rawOpen{
+				version: 4,
+				asn:     64497,
+				hold:    90,
+				id:      0,
+			})),
 			want: &Notification{
 				Code:    NotificationOpenMessageError,
 				Subcode: SubcodeBadBGPIdentifier,
@@ -801,7 +964,12 @@ func TestPeerOpenRejected(t *testing.T) {
 		},
 		{
 			name: "no four octet capability",
-			open: rawMessage(MessageTypeOpen, rawOpenBody(4, 64497, 90, 0xc0000202)),
+			open: rawMessage(MessageTypeOpen, rawOpenBody(rawOpen{
+				version: 4,
+				asn:     64497,
+				hold:    90,
+				id:      0xc0000202,
+			})),
 			want: &Notification{
 				Code:    NotificationOpenMessageError,
 				Subcode: SubcodeUnsupportedCapability,
@@ -811,7 +979,11 @@ func TestPeerOpenRejected(t *testing.T) {
 		{
 			name: "bad peer AS",
 			cfg:  func(c *PeerConfig) { c.PeerASN = 64497 },
-			open: mustMessage(t, &Open{ASN: 64498, HoldTime: 90 * time.Second, ID: MustParseIdentifier("192.0.2.2")}),
+			open: mustMessage(t, &Open{
+				ASN:      64498,
+				HoldTime: 90 * time.Second,
+				ID:       MustParseIdentifier("192.0.2.2"),
+			}),
 			want: &Notification{
 				Code:    NotificationOpenMessageError,
 				Subcode: SubcodeBadPeerAS,
@@ -822,7 +994,11 @@ func TestPeerOpenRejected(t *testing.T) {
 			// addressing (RFC 4271, section 6.2).
 			name: "bad peer identifier",
 			cfg:  func(c *PeerConfig) { c.PeerID = MustParseIdentifier("192.0.2.2") },
-			open: mustMessage(t, &Open{ASN: 64497, HoldTime: 90 * time.Second, ID: MustParseIdentifier("192.0.2.99")}),
+			open: mustMessage(t, &Open{
+				ASN:      64497,
+				HoldTime: 90 * time.Second,
+				ID:       MustParseIdentifier("192.0.2.99"),
+			}),
 			want: &Notification{
 				Code:    NotificationOpenMessageError,
 				Subcode: SubcodeBadBGPIdentifier,
@@ -832,17 +1008,25 @@ func TestPeerOpenRejected(t *testing.T) {
 			// RFC 7607: AS 0 is never valid, even with no configured
 			// PeerASN to mismatch.
 			name: "zero peer AS",
-			open: mustMessage(t, &Open{ASN: 0, HoldTime: 90 * time.Second, ID: MustParseIdentifier("192.0.2.2")}),
+			open: mustMessage(t, &Open{
+				ASN:      0,
+				HoldTime: 90 * time.Second,
+				ID:       MustParseIdentifier("192.0.2.2"),
+			}),
 			want: &Notification{
 				Code:    NotificationOpenMessageError,
 				Subcode: SubcodeBadPeerAS,
 			},
 		},
 		{
-			// RFC 6286, section 2.2: an internal peer — same AS as ours —
-			// bearing our own identifier is a duplicate inside the AS.
+			// RFC 6286, section 2.2: an internal peer, in the same AS as
+			// ours, bearing our own identifier is a duplicate inside the AS.
 			name: "internal peer with local identifier",
-			open: mustMessage(t, &Open{ASN: 64496, HoldTime: 90 * time.Second, ID: MustParseIdentifier("192.0.2.1")}),
+			open: mustMessage(t, &Open{
+				ASN:      64496,
+				HoldTime: 90 * time.Second,
+				ID:       MustParseIdentifier("192.0.2.1"),
+			}),
 			want: &Notification{
 				Code:    NotificationOpenMessageError,
 				Subcode: SubcodeBadBGPIdentifier,
@@ -856,7 +1040,10 @@ func TestPeerOpenRejected(t *testing.T) {
 				HoldTime: 90 * time.Second,
 				ID:       MustParseIdentifier("192.0.2.2"),
 				Capabilities: []Capability{
-					MultiprotocolCapability(Family{AFI: AFIIPv4, SAFI: SAFIUnicast}),
+					MultiprotocolCapability(Family{
+						AFI:  AFIIPv4,
+						SAFI: SAFIUnicast,
+					}),
 				},
 			}),
 			want: &Notification{
@@ -1067,9 +1254,9 @@ func TestPeerOpenSendFailed(t *testing.T) {
 	})
 
 	// Reset the connection from the scripted side before delivery: closing
-	// with linger zero sends an RST, so the Peer's OPEN write fails — or,
-	// if the write slips into the socket buffer before the reset lands,
-	// the connection's first read fails instead. Either way the attempt
+	// with linger zero sends an RST, so the Peer's OPEN write fails. If the
+	// write slips into the socket buffer before the reset lands, the
+	// connection's first read fails instead. Either way the attempt
 	// ends with a transport error and nothing on the wire to report.
 	client, server := testConns(t, "tcp4")
 	tc := server.rawConn().(*net.TCPConn)
@@ -1170,6 +1357,7 @@ func TestPeerSendConnectionReset(t *testing.T) {
 			return ctx.Err()
 		},
 	})
+
 	s := r.acceptScript()
 
 	s.establish(scriptOpen())
@@ -1200,7 +1388,7 @@ func TestPeerSendConnectionReset(t *testing.T) {
 	}
 
 	// A connection write failure ends the session, so the returned error
-	// wraps ErrNotEstablished — unlike a marshal failure, which returns its
+	// wraps ErrNotEstablished. A marshal failure, by contrast, returns its
 	// error alone; see TestPeerSendMarshalError.
 	if !errors.Is(sendErr, ErrNotEstablished) {
 		t.Fatalf("send error does not wrap ErrNotEstablished: %v", sendErr)
@@ -1262,7 +1450,11 @@ func TestPeerTreatAsWithdrawUpdate(t *testing.T) {
 		updateC := make(chan updateDelivery, 1)
 		r := newPipeRig(t, PeerConfig{
 			OnUpdate: func(_ context.Context, _ *Peer, u *Update, d *UpdateDiagnostics) error {
-				updateC <- updateDelivery{u: u, d: d}
+				updateC <- updateDelivery{
+					u: u,
+					d: d,
+				}
+
 				return nil
 			},
 		})
@@ -1282,8 +1474,11 @@ func TestPeerTreatAsWithdrawUpdate(t *testing.T) {
 			t.Fatal("no diagnostics delivered with a treat-as-withdraw UPDATE")
 		}
 
-		wantMessageError(t, got.d.Malformed, NotificationUpdateMessageError,
-			SubcodeAttributeFlagsError, optionalOriginAttr())
+		wantMessageError(t, got.d.Malformed, &Notification{
+			Code:    NotificationUpdateMessageError,
+			Subcode: SubcodeAttributeFlagsError,
+			Data:    optionalOriginAttr(),
+		})
 
 		// The announcement the handler is to withdraw is left exactly as
 		// parsed, and so are the attributes which caused the mark.
@@ -1315,10 +1510,9 @@ func TestPeerTreatAsWithdrawUpdate(t *testing.T) {
 	})
 }
 
-// TestPeerUpdateSessionReset verifies that an error RFC 7606 still
-// classifies as a session reset behaves as before: an unrecognized
-// well-known attribute is answered with a NOTIFICATION and the session
-// ends.
+// TestPeerUpdateSessionReset verifies the session reset path of RFC 7606:
+// an unrecognized well-known attribute is answered with a NOTIFICATION and
+// the session ends.
 func TestPeerUpdateSessionReset(t *testing.T) {
 	t.Parallel()
 
@@ -1497,6 +1691,7 @@ func TestPeerHoldExpiryStallUnderBudget(t *testing.T) {
 		// The hold timer fired mid-stall and found the budget unspent; the
 		// session lives, its keepalives still flowing.
 		s.nextKeepalive()
+
 		select {
 		case c := <-r.closeC:
 			t.Fatalf("session closed unexpectedly: %+v", c)
@@ -1528,9 +1723,11 @@ func TestPeerStuckHandler(t *testing.T) {
 				return nil
 			},
 		})
+
 		// The stuck handler outlives the test; release it so its goroutine can
 		// exit before the race detector's leak accounting matters.
 		defer close(releaseC)
+
 		s := r.acceptScript()
 
 		s.establish(scriptOpen())
@@ -1606,6 +1803,7 @@ func TestPeerBlockedHandlerKeepalives(t *testing.T) {
 		}
 
 		close(releaseC)
+
 		select {
 		case c := <-r.closeC:
 			t.Fatalf("session closed unexpectedly: %+v", c)
@@ -1778,14 +1976,21 @@ func TestPeerOnKeepalive(t *testing.T) {
 // TestPeerOnRouteRefresh verifies the OnRouteRefresh contract: every
 // ROUTE-REFRESH received in session reaches the hook with its family intact
 // and in arrival order, and the hook's error terminates the session like any
-// handler's. The package does not act on a refresh request itself — replaying
-// an Adj-RIB-Out is the caller's RIB's job — so delivery and
-// teardown are the whole contract.
+// handler's. The package does not act on a refresh request itself: replaying
+// an Adj-RIB-Out is the caller's RIB's job, so delivery and teardown are the
+// whole contract.
 func TestPeerOnRouteRefresh(t *testing.T) {
 	t.Parallel()
 
-	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
-	v6u := Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+	v4u := Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIUnicast,
+	}
+
+	v6u := Family{
+		AFI:  AFIIPv6,
+		SAFI: SAFIUnicast,
+	}
 
 	// establish brings up a session whose peer advertised route refresh: the
 	// negotiation a peer which sends ROUTE-REFRESH is expected to have done.
@@ -1885,9 +2090,19 @@ func TestPeerEnhancedRouteRefreshNegotiation(t *testing.T) {
 		name        string
 		local, peer bool
 	}{
-		{name: "both", local: true, peer: true},
-		{name: "only local", local: true},
-		{name: "only peer", peer: true},
+		{
+			name:  "both",
+			local: true,
+			peer:  true,
+		},
+		{
+			name:  "only local",
+			local: true,
+		},
+		{
+			name: "only peer",
+			peer: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1902,6 +2117,7 @@ func TestPeerEnhancedRouteRefreshNegotiation(t *testing.T) {
 						return nil
 					},
 				})
+
 				s := r.acceptScript()
 
 				open := scriptOpen()
@@ -1932,7 +2148,10 @@ func TestPeerEnhancedRouteRefreshNegotiation(t *testing.T) {
 func TestPeerEnhancedRouteRefreshDelivery(t *testing.T) {
 	t.Parallel()
 
-	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+	v4u := Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIUnicast,
+	}
 
 	synctest.Test(t, func(t *testing.T) {
 		events := make(chan string, 3)
@@ -1948,6 +2167,7 @@ func TestPeerEnhancedRouteRefreshDelivery(t *testing.T) {
 				return nil
 			},
 		})
+
 		s := r.acceptScript()
 
 		open := scriptOpen()
@@ -1955,6 +2175,7 @@ func TestPeerEnhancedRouteRefreshDelivery(t *testing.T) {
 			{Code: CapabilityRouteRefresh},
 			{Code: CapabilityEnhancedRouteRefresh},
 		}
+
 		s.establish(open)
 
 		if sess := recv(t, r.estC, "session establishment"); !sess.EnhancedRouteRefresh {
@@ -1962,15 +2183,23 @@ func TestPeerEnhancedRouteRefreshDelivery(t *testing.T) {
 		}
 
 		withdrawn := netip.MustParsePrefix("198.51.100.0/24")
-		s.write(&RouteRefresh{Family: v4u, Subtype: RouteRefreshBegin})
+		s.write(&RouteRefresh{
+			Family:  v4u,
+			Subtype: RouteRefreshBegin,
+		})
+
 		s.write(&Update{Withdrawn: []netip.Prefix{withdrawn}})
-		s.write(&RouteRefresh{Family: v4u, Subtype: RouteRefreshEnd})
+		s.write(&RouteRefresh{
+			Family:  v4u,
+			Subtype: RouteRefreshEnd,
+		})
 
 		want := []string{
 			"BoRR " + v4u.String(),
 			fmt.Sprintf("UPDATE [%s]", withdrawn),
 			"EoRR " + v4u.String(),
 		}
+
 		for _, w := range want {
 			if got := recv(t, events, "delivery"); got != w {
 				t.Fatalf("unexpected delivery: got %q, want %q", got, w)
@@ -1995,17 +2224,34 @@ func TestPeerEnhancedRouteRefreshDelivery(t *testing.T) {
 func TestPeerEnhancedRouteRefreshIgnored(t *testing.T) {
 	t.Parallel()
 
-	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
-	v6u := Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+	v4u := Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIUnicast,
+	}
+
+	v6u := Family{
+		AFI:  AFIIPv6,
+		SAFI: SAFIUnicast,
+	}
 
 	tests := []struct {
 		name    string
 		peerCap bool
 		ignored RouteRefreshSubtype
 	}{
-		{name: "unnegotiated BoRR", ignored: RouteRefreshBegin},
-		{name: "unnegotiated EoRR", ignored: RouteRefreshEnd},
-		{name: "unassigned subtype", peerCap: true, ignored: 200},
+		{
+			name:    "unnegotiated BoRR",
+			ignored: RouteRefreshBegin,
+		},
+		{
+			name:    "unnegotiated EoRR",
+			ignored: RouteRefreshEnd,
+		},
+		{
+			name:    "unassigned subtype",
+			peerCap: true,
+			ignored: 200,
+		},
 	}
 
 	for _, tt := range tests {
@@ -2022,6 +2268,7 @@ func TestPeerEnhancedRouteRefreshIgnored(t *testing.T) {
 						return nil
 					},
 				})
+
 				s := r.acceptScript()
 
 				open := scriptOpen()
@@ -2036,7 +2283,11 @@ func TestPeerEnhancedRouteRefreshIgnored(t *testing.T) {
 				// The ignored message first, then a request for a different
 				// family: handlers run in wire order, so the request arriving
 				// first proves the other was dropped rather than delayed.
-				s.write(&RouteRefresh{Family: v4u, Subtype: tt.ignored})
+				s.write(&RouteRefresh{
+					Family:  v4u,
+					Subtype: tt.ignored,
+				})
+
 				s.write(&RouteRefresh{Family: v6u})
 
 				want := &RouteRefresh{Family: v6u}
@@ -2062,7 +2313,10 @@ func TestPeerEnhancedRouteRefreshIgnored(t *testing.T) {
 func TestPeerRouteRefreshReservedByteDelivered(t *testing.T) {
 	t.Parallel()
 
-	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+	v4u := Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIUnicast,
+	}
 
 	synctest.Test(t, func(t *testing.T) {
 		rrC := make(chan *RouteRefresh, 1)
@@ -2074,6 +2328,7 @@ func TestPeerRouteRefreshReservedByteDelivered(t *testing.T) {
 				return nil
 			},
 		})
+
 		s := r.acceptScript()
 
 		open := scriptOpen()
@@ -2081,7 +2336,11 @@ func TestPeerRouteRefreshReservedByteDelivered(t *testing.T) {
 		s.establish(open)
 		recv(t, r.estC, "session establishment")
 
-		want := &RouteRefresh{Family: v4u, Subtype: 7}
+		want := &RouteRefresh{
+			Family:  v4u,
+			Subtype: 7,
+		}
+
 		s.write(want)
 		if d := diff(t, want, recv(t, rrC, "route refresh hook")); d != "" {
 			t.Fatalf("unexpected ROUTE-REFRESH (-want +got):\n%s", d)
@@ -2117,8 +2376,11 @@ func TestPeerOnUpdateOwnsValues(t *testing.T) {
 	// as one parsed from a connection's read buffer would.
 	buf := []byte{0x01, 0x02, 0x03, 0x04}
 	borrowed := &Update{
-		Attributes: RawAttributes{{Type: AttrCommunities, Data: buf}},
-		NLRI:       []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+		Attributes: RawAttributes{{
+			Type: AttrCommunities,
+			Data: buf,
+		}},
+		NLRI: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
 	}
 
 	if err := p.fsm.cfg.OnUpdate(context.Background(), p.fsm, borrowed, nil); err != nil {
@@ -2159,6 +2421,7 @@ func TestPeerOnStateChange(t *testing.T) {
 			Code:    NotificationCease,
 			Subcode: SubcodeCeaseAdministrativeReset,
 		})
+
 		recv(t, r.closeC, "session close")
 
 		want := [][2]State{
@@ -2212,7 +2475,7 @@ func TestPeerAddr(t *testing.T) {
 	}
 }
 
-// TestPeerAddrRequiredToDial verifies that the built-in Dialer path still
+// TestPeerAddrRequiredToDial verifies that the built-in Dialer path
 // demands real addressing: only a DialFunc transport may go unaddressed.
 func TestPeerAddrRequiredToDial(t *testing.T) {
 	t.Parallel()

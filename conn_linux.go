@@ -28,7 +28,7 @@ const gtsmTTL = 255
 // BGP unnumbered peering over fe80::/10 works. TCP_MD5SIG_EXT is not used:
 // its prefix keys (TCP_MD5SIG_FLAG_PREFIX) have no exact-address use, and
 // its interface binding (TCP_MD5SIG_FLAG_IFINDEX) scopes a key to an L3
-// master (VRF) device rather than to a link — VRF support can be added
+// master (VRF) device rather than to a link. VRF support can be added
 // without changing this contract.
 func setMD5(c syscall.RawConn, peer netip.Addr, password string) error {
 	if len(password) > unix.TCP_MD5SIG_MAXKEYLEN {
@@ -152,9 +152,10 @@ func getsockoptInt(fd, level, opt int) (int, error) {
 }
 
 // acceptTransient classifies an accept failure which is not listener
-// death: abort reports a single connection the kernel aborted before it
-// was accepted (retry immediately), and exhausted reports file descriptor
-// exhaustion, which recovers as sessions close (retry after a pause).
+// death. Abort reports a single connection the kernel aborted before it
+// was accepted, which is retried immediately. Exhausted reports file
+// descriptor exhaustion, which recovers as sessions close and is retried
+// after a pause.
 func acceptTransient(err error) (abort, exhausted bool) {
 	if errors.Is(err, unix.ECONNABORTED) {
 		return true, false

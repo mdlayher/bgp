@@ -2,11 +2,11 @@
 //
 // It exists as the permanent in-tree proof that a RIB living outside the bgp
 // package can be built against the Peer boundary alone, including graceful
-// restart helper behavior from Close and Session.GracefulRestart. It
-// touches only the bgp package's exported API, and it is
-// deliberately naive: no best-path selection ever runs here — the local
-// routes are the caller's static assertion of its best paths — and nothing
-// about its storage is tuned. Do not reuse it as a real RIB.
+// restart helper behavior from Close and Session.GracefulRestart. It touches
+// only the bgp package's exported API, and it is deliberately naive: no
+// best-path selection ever runs here, and nothing about its storage is tuned.
+// The local routes are the caller's static assertion of its best paths. Do
+// not reuse it as a real RIB.
 //
 // Its outbound side is the recommended RIB shape in miniature: one pusher
 // goroutine per session, fed through a dirty set with
@@ -31,7 +31,7 @@ import (
 type Config struct {
 	// Local is the static Loc-RIB: the caller-asserted best paths per
 	// family, as ready-to-send UPDATEs. Each UPDATE must announce at least
-	// one prefix in its family — IPv4 unicast prefixes in Update.NLRI,
+	// one prefix in its family: IPv4 unicast prefixes in Update.NLRI, and
 	// any other family's inside an MP_REACH_NLRI attribute. The Table
 	// announces them to every peer on session establishment and on route
 	// refresh, and answers Best from them. The map and its UPDATEs are
@@ -40,10 +40,10 @@ type Config struct {
 
 	// AfterFunc, if set, schedules the graceful restart sweep which
 	// flushes a restarting peer's stale routes at its advertised restart
-	// time. It mirrors time.AfterFunc's contract — the returned stop
-	// reports whether it prevented the sweep from running — and a nil
-	// AfterFunc uses time.AfterFunc. Tests substitute a controllable
-	// clock.
+	// time. It mirrors time.AfterFunc's contract: the returned stop
+	// reports whether it prevented the sweep from running. A nil AfterFunc
+	// uses time.AfterFunc. Tests substitute a controllable clock. The Table
+	// never calls AfterFunc or stop with its lock held.
 	AfterFunc func(d time.Duration, f func()) (stop func() bool)
 }
 
@@ -116,18 +116,17 @@ type adjRoute struct {
 // New validates the static Loc-RIB and produces a Table serving any number of
 // peers.
 func New(cfg Config) (*Table, error) {
-	after := cfg.AfterFunc
-	if after == nil {
-		after = func(d time.Duration, f func()) func() bool {
-			return time.AfterFunc(d, f).Stop
-		}
-	}
-
 	t := &Table{
 		local:     cfg.Local,
 		best:      make(map[bgp.Family]map[netip.Prefix]*bgp.Update),
-		afterFunc: after,
+		afterFunc: cfg.AfterFunc,
 		peers:     make(map[*bgp.Peer]*peerState),
+	}
+
+	if t.afterFunc == nil {
+		t.afterFunc = func(d time.Duration, f func()) func() bool {
+			return time.AfterFunc(d, f).Stop
+		}
 	}
 
 	for f, us := range cfg.Local {
@@ -156,7 +155,12 @@ func New(cfg Config) (*Table, error) {
 // updatePrefixes lists the prefixes u announces in family f: Update.NLRI
 // for IPv4 unicast, MP_REACH_NLRI contents for every other family.
 func updatePrefixes(f bgp.Family, u *bgp.Update) ([]netip.Prefix, error) {
-	if (f == bgp.Family{AFI: bgp.AFIIPv4, SAFI: bgp.SAFIUnicast}) {
+	v4u := bgp.Family{
+		AFI:  bgp.AFIIPv4,
+		SAFI: bgp.SAFIUnicast,
+	}
+
+	if f == v4u {
 		return u.NLRI, nil
 	}
 
@@ -223,6 +227,7 @@ func (t *Table) Routes(p *bgp.Peer, f bgp.Family) []Route {
 
 		return a.Prefix.Bits() - b.Prefix.Bits()
 	})
+
 	return out
 }
 
@@ -231,12 +236,10 @@ func (t *Table) Routes(p *bgp.Peer, f bgp.Family) []Route {
 // push. Wire it, and its four siblings, into each peer's PeerConfig.
 func (t *Table) OnEstablished(ctx context.Context, p *bgp.Peer, s bgp.Session) error {
 	t.mu.Lock()
-	ps := t.state(p)
+	ps := t.stateLocked(p)
 	ps.gen++
-	if ps.stopSweep != nil {
-		ps.stopSweep()
-		ps.stopSweep = nil
-	}
+	stop := ps.stopSweep
+	ps.stopSweep = nil
 
 	ps.gr = s.GracefulRestart
 	ps.localN = notificationSupport(s.Local)
@@ -275,6 +278,12 @@ func (t *Table) OnEstablished(ctx context.Context, p *bgp.Peer, s bgp.Session) e
 	ps.pending, ps.wake = pending, wake
 	t.mu.Unlock()
 
+	// stop is the caller's AfterFunc, so it runs outside the lock. A sweep
+	// which fires first finds gen changed and does nothing.
+	if stop != nil {
+		stop()
+	}
+
 	// Watch ctx per the handler contract: a session already tearing down
 	// gets no pusher. The retention state above is settled either way;
 	// OnClose owes the close-side half.
@@ -309,6 +318,7 @@ func (t *Table) push(ctx context.Context, p *bgp.Peer, pending map[bgp.Family]bo
 
 			return cmp.Compare(a.SAFI, b.SAFI)
 		})
+
 		clear(pending)
 		t.mu.Unlock()
 
@@ -338,7 +348,7 @@ func (t *Table) push(ctx context.Context, p *bgp.Peer, pending map[bgp.Family]bo
 func (t *Table) OnUpdate(_ context.Context, p *bgp.Peer, u *bgp.Update, d *bgp.UpdateDiagnostics) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	ps := t.state(p)
+	ps := t.stateLocked(p)
 
 	if f, ok := u.EndOfRIB(); ok {
 		for pre, r := range ps.routes[f] {
@@ -377,7 +387,11 @@ func (t *Table) OnUpdate(_ context.Context, p *bgp.Peer, u *bgp.Update, d *bgp.U
 		}
 	}
 
-	v4u := bgp.Family{AFI: bgp.AFIIPv4, SAFI: bgp.SAFIUnicast}
+	v4u := bgp.Family{
+		AFI:  bgp.AFIIPv4,
+		SAFI: bgp.SAFIUnicast,
+	}
+
 	for _, pre := range u.Withdrawn {
 		delete(ps.routes[v4u], pre)
 	}
@@ -444,25 +458,53 @@ func (t *Table) OnKeepalive(context.Context, *bgp.Peer) error { return nil }
 // decision. An eligible close marks the peer's routes stale and arms a sweep
 // at the peer's advertised restart time; any other close flushes the peer.
 func (t *Table) OnClose(p *bgp.Peer, c bgp.Close) {
+	d, gen, ok := t.markStale(p, c)
+	if !ok {
+		return
+	}
+
+	// Everything retained is now stale, so an expired restart time flushes
+	// the peer wholesale. gen guards the stop race: time.AfterFunc's Stop
+	// cannot un-run a callback already in flight. AfterFunc is the caller's,
+	// so it runs outside the lock.
+	stop := t.afterFunc(d, func() {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		if ps, ok := t.peers[p]; ok && ps.gen == gen {
+			delete(t.peers, p)
+		}
+	})
+
+	if !t.armSweep(p, gen, stop) {
+		stop()
+	}
+}
+
+// markStale applies a close to p's retained state. It reports false when
+// there is no sweep to arm: the close was an attempt, the peer has no state,
+// or retention does not apply and the peer was flushed. Otherwise it marks
+// the retained routes stale and returns the peer's restart time and the
+// generation a sweep must match.
+func (t *Table) markStale(p *bgp.Peer, c bgp.Close) (time.Duration, int, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if !c.Established {
 		// A failed attempt between sessions: retention state, including any
 		// armed sweep, must survive it untouched.
-		return
+		return 0, 0, false
 	}
 
 	ps, ok := t.peers[p]
 	if !ok {
-		return
+		return 0, 0, false
 	}
 
 	ps.gen++
 
 	if !retain(ps.gr, ps.localN, c) {
 		delete(t.peers, p)
-		return
+		return 0, 0, false
 	}
 
 	// RFC 4724, section 4.2: retain, as stale, only the families the
@@ -483,17 +525,22 @@ func (t *Table) OnClose(p *bgp.Peer, c bgp.Close) {
 		}
 	}
 
-	// Everything retained is now stale, so an expired restart time flushes
-	// the peer wholesale. gen guards the stop race: time.AfterFunc's Stop
-	// cannot un-run a callback already in flight.
-	gen := ps.gen
-	ps.stopSweep = t.afterFunc(ps.gr.RestartTime, func() {
-		t.mu.Lock()
-		defer t.mu.Unlock()
-		if ps, ok := t.peers[p]; ok && ps.gen == gen {
-			delete(t.peers, p)
-		}
-	})
+	return ps.gr.RestartTime, ps.gen, true
+}
+
+// armSweep records stop as p's sweep, unless the sweep for generation gen
+// already ran or was superseded. It reports whether stop was recorded.
+func (t *Table) armSweep(p *bgp.Peer, gen int, stop func() bool) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	ps, ok := t.peers[p]
+	if !ok || ps.gen != gen {
+		return false
+	}
+
+	ps.stopSweep = stop
+	return true
 }
 
 // retain decides graceful restart retention for a close: the helper's side of
@@ -516,8 +563,8 @@ func retain(gr *bgp.GracefulRestart, localN bool, c bgp.Close) bool {
 		return false
 	}
 
-	n := c.Notification
-	return n.Code != bgp.NotificationCease || n.Subcode != bgp.SubcodeCeaseHardReset
+	return c.Notification.Code != bgp.NotificationCease ||
+		c.Notification.Subcode != bgp.SubcodeCeaseHardReset
 }
 
 // notificationSupport reports whether an OPEN advertised the RFC 8538 N bit
@@ -545,8 +592,9 @@ func notificationSupport(o *bgp.Open) bool {
 // shutting down calls Wait after its peers' Run calls have returned.
 func (t *Table) Wait() { t.wg.Wait() }
 
-// state returns p's peerState, creating it on first use.
-func (t *Table) state(p *bgp.Peer) *peerState {
+// stateLocked returns p's peerState, creating it on first use. The caller
+// must hold t.mu.
+func (t *Table) stateLocked(p *bgp.Peer) *peerState {
 	ps, ok := t.peers[p]
 	if !ok {
 		ps = &peerState{routes: make(map[bgp.Family]map[netip.Prefix]*adjRoute)}

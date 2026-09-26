@@ -66,18 +66,19 @@ const (
 	sweepFired
 )
 
-// TestTableTorture hammers one Table from many goroutines: eight workers
-// each drive a peer through randomized session lifecycles — random graceful
-// restart capabilities on both sides of each session, random route churn,
-// random closes, and a chaos goroutine firing retention sweeps into the
-// workers' races — while readers concurrently validate every snapshot. Every
-// worker ends with a flush, so the table must drain to empty.
+// TestTableTorture hammers one Table from many goroutines. Eight workers each
+// drive a peer through randomized session lifecycles: random graceful restart
+// capabilities on both sides of each session, random route churn, and random
+// closes. A chaos goroutine fires retention sweeps into the workers' races,
+// and readers concurrently validate every snapshot. Every worker ends with a
+// flush, so the table must drain to empty.
 func TestTableTorture(t *testing.T) {
 	t.Parallel()
 
 	master := rand.New(rand.NewPCG(tortureSeed(t), 0))
 
-	tb := newTable(t, testrib.Config{AfterFunc: chaosAfterFunc(t, master.Uint64())})
+	// Nothing waits on a change, so sweeps notify no one.
+	tb := newTable(t, testrib.Config{AfterFunc: chaosAfterFunc(t, master.Uint64(), nil)})
 
 	const workers, iters = 8, 60
 	peers := make([]*bgp.Peer, workers)
@@ -111,9 +112,15 @@ func TestTableTorture(t *testing.T) {
 	}
 
 	var ws sync.WaitGroup
-	for i := range workers {
-		seed, p := master.Uint64(), peers[i]
-		ws.Go(func() { tortureWorker(t, tb, p, seed, iters) })
+	for _, p := range peers {
+		w := tortureWorkerConfig{
+			tb:    tb,
+			p:     p,
+			seed:  master.Uint64(),
+			iters: iters,
+		}
+
+		ws.Go(func() { tortureWorker(t, w) })
 	}
 
 	ws.Wait()
@@ -144,11 +151,16 @@ func TestTableTorture(t *testing.T) {
 // life surviving unre-announced.
 func TestTableTortureTCP(t *testing.T) {
 	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("skipping, test uses real TCP connections and timers")
 	}
 
 	rng := rand.New(rand.NewPCG(tortureSeed(t), 1))
+
+	// changed signals every change to either table, so each wait rechecks
+	// its condition on the next change rather than polling.
+	changed := make(changes, 1)
 
 	var (
 		staticA = netip.MustParsePrefix("203.0.113.1/32")
@@ -157,15 +169,25 @@ func TestTableTortureTCP(t *testing.T) {
 
 	tableA := newTable(t, testrib.Config{
 		Local:     tortureStatic(staticA),
-		AfterFunc: chaosAfterFunc(t, rng.Uint64()),
+		AfterFunc: chaosAfterFunc(t, rng.Uint64(), changed),
 	})
 
 	tableB := newTable(t, testrib.Config{
 		Local:     tortureStatic(staticB),
-		AfterFunc: chaosAfterFunc(t, rng.Uint64()),
+		AfterFunc: chaosAfterFunc(t, rng.Uint64(), changed),
 	})
 
-	rig := newTortureTCPRig(t, rng, tableA, tableB, staticA, staticB)
+	rig := &tortureTCPRig{
+		t:       t,
+		rng:     rng,
+		tableA:  tableA,
+		tableB:  tableB,
+		staticA: staticA,
+		staticB: staticB,
+		changed: changed,
+	}
+
+	rig.startA()
 
 	peerB1, cancelB1, estB1 := rig.startB("B1")
 	rig.curB.Store(peerB1)
@@ -180,7 +202,7 @@ func TestTableTortureTCP(t *testing.T) {
 	// real. Whatever the random capabilities negotiated (flush, or stale
 	// marking followed by a chaos sweep), no fresh B route may survive.
 	cancelB1()
-	waitFor(t, "table A to quiesce after B's shutdown", func() bool {
+	waitFor(t, "table A to quiesce after B's shutdown", changed, func() bool {
 		for _, f := range torFamilies {
 			for _, r := range tableA.Routes(rig.peerA, f) {
 				if !r.Stale {
@@ -236,14 +258,16 @@ type sweepEntry struct {
 // chaosAfterFunc returns a Config.AfterFunc which replaces a Table's sweep
 // timers with hand-fired fakes: a chaos goroutine fires each armed sweep
 // after a random number of yields, so the stop-vs-fire race and the late-fire
-// generation guard are exercised constantly with no wall-clock waits. The
-// duration is deliberately ignored — only whether a sweep fires matters here;
-// that it fires *when* advertised is TestTableRestartTimerExpiry's job.
-func chaosAfterFunc(t *testing.T, seed uint64) func(time.Duration, func()) func() bool {
+// generation guard are exercised constantly with no wall-clock waits. Each
+// sweep which fires notifies changed. The duration is deliberately ignored:
+// only whether a sweep fires matters here, and that it fires when advertised
+// is TestTableRestartTimerExpiry's job.
+func chaosAfterFunc(t *testing.T, seed uint64, changed changes) func(time.Duration, func()) func() bool {
 	armC := make(chan *sweepEntry, 4096)
-	stop, done := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(done)
+	stop := make(chan struct{})
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
 		rng := rand.New(rand.NewPCG(seed, 0))
 		for {
 			select {
@@ -259,13 +283,15 @@ func chaosAfterFunc(t *testing.T, seed uint64) func(time.Duration, func()) func(
 
 				if e.state.CompareAndSwap(sweepArmed, sweepFired) {
 					e.f()
+					changed.notify()
 				}
 			}
 		}
-	}()
+	})
+
 	t.Cleanup(func() {
 		close(stop)
-		<-done
+		wg.Wait()
 	})
 
 	return func(_ time.Duration, f func()) func() bool {
@@ -287,8 +313,8 @@ func checkSnapshot(rs []testrib.Route) error {
 			continue
 		}
 
-		prev := rs[i-1].Prefix
-		if c := prev.Addr().Compare(r.Prefix.Addr()); c > 0 || (c == 0 && prev.Bits() >= r.Prefix.Bits()) {
+		c := rs[i-1].Prefix.Addr().Compare(r.Prefix.Addr())
+		if c > 0 || (c == 0 && rs[i-1].Prefix.Bits() >= r.Prefix.Bits()) {
 			return fmt.Errorf("snapshot not strictly sorted at %s", r.Prefix)
 		}
 	}
@@ -296,16 +322,25 @@ func checkSnapshot(rs []testrib.Route) error {
 	return nil
 }
 
+// A tortureWorkerConfig is one torture worker's table, peer, random seed,
+// and number of session lifecycles to run.
+type tortureWorkerConfig struct {
+	tb    *testrib.Table
+	p     *bgp.Peer
+	seed  uint64
+	iters int
+}
+
 // tortureWorker drives one peer's randomized lifecycle loop. Handler calls
 // for one peer are serialized, per the documented contract; concurrency comes
 // from the other workers, the readers, and the sweep timers.
-func tortureWorker(t *testing.T, tb *testrib.Table, p *bgp.Peer, seed uint64, iters int) {
-	rng := rand.New(rand.NewPCG(seed, 0))
+func tortureWorker(t *testing.T, w tortureWorkerConfig) {
+	rng := rand.New(rand.NewPCG(w.seed, 0))
 	ctx := context.Background()
 
-	for range iters {
+	for range w.iters {
 		s, localN := tortureSession(rng)
-		if err := tb.OnEstablished(ctx, p, s); err != nil {
+		if err := w.tb.OnEstablished(ctx, w.p, s); err != nil {
 			t.Errorf("failed to establish: %v", err)
 			return
 		}
@@ -317,7 +352,7 @@ func tortureWorker(t *testing.T, tb *testrib.Table, p *bgp.Peer, seed uint64, it
 				return
 			}
 
-			if err := tb.OnUpdate(ctx, p, u, nil); err != nil {
+			if err := w.tb.OnUpdate(ctx, w.p, u, nil); err != nil {
 				t.Errorf("valid UPDATE rejected: %v", err)
 				return
 			}
@@ -325,7 +360,7 @@ func tortureWorker(t *testing.T, tb *testrib.Table, p *bgp.Peer, seed uint64, it
 
 		if rng.IntN(6) == 0 {
 			f := torFamilies[rng.IntN(len(torFamilies))]
-			if err := tb.OnRouteRefresh(ctx, p, &bgp.RouteRefresh{Family: f}); err != nil {
+			if err := w.tb.OnRouteRefresh(ctx, w.p, &bgp.RouteRefresh{Family: f}); err != nil {
 				t.Errorf("route refresh rejected: %v", err)
 				return
 			}
@@ -334,7 +369,7 @@ func tortureWorker(t *testing.T, tb *testrib.Table, p *bgp.Peer, seed uint64, it
 		before := make(map[bgp.Family]map[netip.Prefix]bool)
 		for _, f := range torFamilies {
 			set := make(map[netip.Prefix]bool)
-			for _, r := range tb.Routes(p, f) {
+			for _, r := range w.tb.Routes(w.p, f) {
 				set[r.Prefix] = true
 			}
 
@@ -342,8 +377,18 @@ func tortureWorker(t *testing.T, tb *testrib.Table, p *bgp.Peer, seed uint64, it
 		}
 
 		cl := tortureClose(rng)
-		tb.OnClose(p, cl)
-		if !checkPostClose(t, tb, p, s.GracefulRestart, localN, cl, before) {
+		w.tb.OnClose(w.p, cl)
+
+		pc := postClose{
+			tb:     w.tb,
+			p:      w.p,
+			gr:     s.GracefulRestart,
+			localN: localN,
+			close:  cl,
+			before: before,
+		}
+
+		if !checkPostClose(t, pc) {
 			return
 		}
 	}
@@ -351,47 +396,62 @@ func tortureWorker(t *testing.T, tb *testrib.Table, p *bgp.Peer, seed uint64, it
 	// End with a session whose close must flush, so the final table is
 	// provably empty. No graceful restart capability means no retention and
 	// no armed sweep.
-	if err := tb.OnEstablished(ctx, p, session(false, nil, v4u, v6u)); err != nil {
+	if err := w.tb.OnEstablished(ctx, w.p, session(false, nil, v4u, v6u)); err != nil {
 		t.Errorf("failed to establish final session: %v", err)
 		return
 	}
 
-	tb.OnClose(p, bgp.Close{Err: net.ErrClosed, Established: true})
+	w.tb.OnClose(w.p, bgp.Close{
+		Err:         net.ErrClosed,
+		Established: true,
+	})
 
-	// And an attempt failure after the flush must observe — and leave —
-	// nothing.
-	tb.OnClose(p, bgp.Close{Err: net.ErrClosed})
+	// And an attempt failure after the flush must observe and leave nothing.
+	w.tb.OnClose(w.p, bgp.Close{Err: net.ErrClosed})
 	for _, f := range torFamilies {
-		if rs := tb.Routes(p, f); len(rs) != 0 {
+		if rs := w.tb.Routes(w.p, f); len(rs) != 0 {
 			t.Errorf("routes after final flush in %v: %v", f, rs)
 			return
 		}
 	}
 }
 
+// A postClose is the state checkPostClose judges: the table and peer, the
+// peer's graceful restart capability and this speaker's N bit from the
+// session which just ended, the close itself, and the peer's prefixes per
+// family before it.
+type postClose struct {
+	tb     *testrib.Table
+	p      *bgp.Peer
+	gr     *bgp.GracefulRestart
+	localN bool
+	close  bgp.Close
+	before map[bgp.Family]map[netip.Prefix]bool
+}
+
 // checkPostClose asserts the retention oracle right after a close: a flushed
 // close leaves nothing, a retained close leaves only stale routes which
 // existed before it, and only in capability-listed families. A sweep firing
 // in between only deletes, so every check tolerates absence.
-func checkPostClose(t *testing.T, tb *testrib.Table, p *bgp.Peer, gr *bgp.GracefulRestart, localN bool, cl bgp.Close, before map[bgp.Family]map[netip.Prefix]bool) bool {
-	hardReset := cl.Notification != nil &&
-		cl.Notification.Code == bgp.NotificationCease &&
-		cl.Notification.Subcode == bgp.SubcodeCeaseHardReset
-	retain := gr != nil && gr.RestartTime > 0 &&
-		(cl.Notification == nil || (localN && gr.NotificationSupport && !hardReset))
+func checkPostClose(t *testing.T, pc postClose) bool {
+	hardReset := pc.close.Notification != nil &&
+		pc.close.Notification.Code == bgp.NotificationCease &&
+		pc.close.Notification.Subcode == bgp.SubcodeCeaseHardReset
+	retain := pc.gr != nil && pc.gr.RestartTime > 0 &&
+		(pc.close.Notification == nil || (pc.localN && pc.gr.NotificationSupport && !hardReset))
 
 	listed := make(map[bgp.Family]bool)
-	if gr != nil {
-		for _, gf := range gr.Families {
+	if pc.gr != nil {
+		for _, gf := range pc.gr.Families {
 			listed[gf.Family] = true
 		}
 	}
 
 	for _, f := range torFamilies {
-		rs := tb.Routes(p, f)
+		rs := pc.tb.Routes(pc.p, f)
 		if !retain || !listed[f] {
 			if len(rs) != 0 {
-				t.Errorf("family %v not flushed after close %+v: %v", f, cl, rs)
+				t.Errorf("family %v not flushed after close %+v: %v", f, pc.close, rs)
 				return false
 			}
 
@@ -404,7 +464,7 @@ func checkPostClose(t *testing.T, tb *testrib.Table, p *bgp.Peer, gr *bgp.Gracef
 				return false
 			}
 
-			if !before[f][r.Prefix] {
+			if !pc.before[f][r.Prefix] {
 				t.Errorf("family %v route %v appeared during close", f, r.Prefix)
 				return false
 			}
@@ -416,7 +476,7 @@ func checkPostClose(t *testing.T, tb *testrib.Table, p *bgp.Peer, gr *bgp.Gracef
 
 // tortureSession synthesizes a random established session: random peer
 // graceful restart claims, and a local OPEN with a random capability set the
-// Table must pick its own N bit out of — including malformed and unknown
+// Table must pick its own N bit out of, including malformed and unknown
 // capabilities to step over. The returned bool is the local N bit oracle.
 func tortureSession(rng *rand.Rand) (bgp.Session, bool) {
 	o := &bgp.Open{
@@ -452,7 +512,10 @@ func tortureSession(rng *rand.Rand) (bgp.Session, bool) {
 	}
 
 	if rng.IntN(2) == 0 {
-		o.Capabilities = append(o.Capabilities, bgp.Capability{Code: 222, Data: []byte{1, 2, 3}})
+		o.Capabilities = append(o.Capabilities, bgp.Capability{
+			Code: 222,
+			Data: []byte{1, 2, 3},
+		})
 	}
 
 	var gr *bgp.GracefulRestart
@@ -509,7 +572,10 @@ func tortureUpdate(rng *rand.Rand) (*bgp.Update, error) {
 			return &bgp.Update{Withdrawn: pick(torPoolV4)}, nil
 		}
 
-		ras, err := bgp.MarshalAttributes(bgp.MPUnreachNLRI{Family: v6u, NLRI: bgp.Prefixes(pick(torPoolV6))})
+		ras, err := bgp.MarshalAttributes(bgp.MPUnreachNLRI{
+			Family: v6u,
+			NLRI:   bgp.Prefixes(pick(torPoolV6)),
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -518,7 +584,11 @@ func tortureUpdate(rng *rand.Rand) (*bgp.Update, error) {
 
 	default: // announce
 		if !v6 {
-			u := &bgp.Update{NLRI: pick(torPoolV4), Attributes: torAttrs}
+			u := &bgp.Update{
+				NLRI:       pick(torPoolV4),
+				Attributes: torAttrs,
+			}
+
 			if rng.IntN(3) == 0 {
 				u.Withdrawn = pick(torPoolV4)
 			}
@@ -550,18 +620,27 @@ func tortureClose(rng *rand.Rand) bgp.Close {
 	switch rng.IntN(5) {
 	case 0:
 		return bgp.Close{
-			Notification: &bgp.Notification{Code: bgp.NotificationCease, Subcode: bgp.SubcodeCeaseHardReset},
-			Local:        local,
-			Established:  true,
+			Notification: &bgp.Notification{
+				Code:    bgp.NotificationCease,
+				Subcode: bgp.SubcodeCeaseHardReset,
+			},
+			Local:       local,
+			Established: true,
 		}
 	case 1, 2:
 		return bgp.Close{
-			Notification: &bgp.Notification{Code: bgp.NotificationCease, Subcode: bgp.SubcodeCeaseAdministrativeShutdown},
-			Local:        local,
-			Established:  true,
+			Notification: &bgp.Notification{
+				Code:    bgp.NotificationCease,
+				Subcode: bgp.SubcodeCeaseAdministrativeShutdown,
+			},
+			Local:       local,
+			Established: true,
 		}
 	default:
-		return bgp.Close{Err: net.ErrClosed, Established: true}
+		return bgp.Close{
+			Err:         net.ErrClosed,
+			Established: true,
+		}
 	}
 }
 
@@ -569,83 +648,76 @@ func tortureClose(rng *rand.Rand) bgp.Close {
 // against its table and listener, plus the shared state every churn phase
 // and each of speaker B's lives works with. Speaker B is created per life
 // by startB, so every restart renegotiates a fresh random capability roll.
+// The caller sets the fields up to changed, then calls startA.
 type tortureTCPRig struct {
 	t                *testing.T
 	rng              *rand.Rand
 	tableA, tableB   *testrib.Table
 	staticA, staticB netip.Prefix
-	peerA            *bgp.Peer
-	estA             <-chan struct{}
-	ln               *bgp.Listener
-	curB             atomic.Pointer[bgp.Peer]
-	readers          sync.WaitGroup
+	changed          changes
+
+	peerA   *bgp.Peer
+	estA    <-chan struct{}
+	ln      *bgp.Listener
+	curB    atomic.Pointer[bgp.Peer]
+	readers sync.WaitGroup
+	accept  sync.WaitGroup
 }
 
-// newTortureTCPRig listens on loopback, builds and runs speaker A with a
-// random capability roll, and feeds accepted connections to it.
-func newTortureTCPRig(t *testing.T, rng *rand.Rand, tableA, tableB *testrib.Table, staticA, staticB netip.Prefix) *tortureTCPRig {
-	rig := &tortureTCPRig{
-		t:       t,
-		rng:     rng,
-		tableA:  tableA,
-		tableB:  tableB,
-		staticA: staticA,
-		staticB: staticB,
-	}
-
-	ln, err := (&bgp.ListenConfig{}).Listen(t.Context(), netip.MustParseAddrPort("127.0.0.1:0"))
+// startA listens on loopback, builds and runs speaker A with a random
+// capability roll, and feeds accepted connections to it.
+func (r *tortureTCPRig) startA() {
+	ln, err := (&bgp.ListenConfig{}).Listen(r.t.Context(), netip.MustParseAddrPort("127.0.0.1:0"))
 	if err != nil {
-		t.Fatalf("failed to listen: %v", err)
+		r.t.Fatalf("failed to listen: %v", err)
 	}
 
-	rig.ln = ln
+	r.ln = ln
 
-	cfgA := wire(tableA, bgp.PeerConfig{
+	cfgA := r.changed.watch(wire(r.tableA, bgp.PeerConfig{
 		LocalASN:        65001,
 		LocalID:         bgp.MustParseIdentifier("192.0.2.1"),
 		Passive:         true,
 		Families:        torFamilies,
-		Capabilities:    tortureCaps(rng),
+		Capabilities:    tortureCaps(r.rng),
 		RouteRefresh:    true,
-		GracefulRestart: tortureGRConfig(rng),
-		Logger:          logger(t, "A"),
-	})
+		GracefulRestart: tortureGRConfig(r.rng),
+		Logger:          logger(r.t, "A"),
+	}))
 
-	rig.estA = establishSignal(&cfgA)
+	r.estA = establishSignal(&cfgA)
 	peerA, err := bgp.NewPeer(netip.MustParseAddr("127.0.0.1"), cfgA)
 	if err != nil {
-		t.Fatalf("failed to create peer A: %v", err)
+		r.t.Fatalf("failed to create peer A: %v", err)
 	}
 
-	rig.peerA = peerA
+	r.peerA = peerA
 
-	acceptDone := make(chan struct{})
-	go func() {
-		defer close(acceptDone)
+	r.accept.Go(func() {
 		for {
-			c, err := ln.Accept()
+			c, err := r.ln.Accept()
 			if err != nil {
 				return
 			}
 
-			if err := peerA.DeliverConn(c); err != nil {
+			if err := r.peerA.DeliverConn(c); err != nil {
 				_ = c.Close()
 			}
 		}
-	}()
-	t.Cleanup(func() {
-		_ = ln.Close()
-		<-acceptDone
 	})
 
-	runPeer(t, peerA)
-	return rig
+	r.t.Cleanup(func() {
+		_ = r.ln.Close()
+		r.accept.Wait()
+	})
+
+	runPeer(r.t, r.peerA)
 }
 
 // startB creates and runs one life of speaker B with a fresh random
 // capability roll, dialing the rig's listener.
 func (r *tortureTCPRig) startB(name string) (*bgp.Peer, context.CancelFunc, <-chan struct{}) {
-	cfg := wire(r.tableB, bgp.PeerConfig{
+	cfg := r.changed.watch(wire(r.tableB, bgp.PeerConfig{
 		LocalASN:        65002,
 		LocalID:         bgp.MustParseIdentifier("192.0.2.2"),
 		Families:        torFamilies,
@@ -653,7 +725,7 @@ func (r *tortureTCPRig) startB(name string) (*bgp.Peer, context.CancelFunc, <-ch
 		RouteRefresh:    true,
 		GracefulRestart: tortureGRConfig(r.rng),
 		Logger:          logger(r.t, name),
-	})
+	}))
 
 	est := establishSignal(&cfg)
 	ap := netip.MustParseAddrPort(r.ln.Addr().String())
@@ -722,19 +794,34 @@ func (r *tortureTCPRig) phase(name string, peerB *bgp.Peer) {
 	var churners sync.WaitGroup
 	for i := range senders {
 		lo, hi := i*4, (i+1)*4
-		sa, sb := r.rng.Uint64(), r.rng.Uint64()
-		outA, outB := &finalsA[i], &finalsB[i]
-		churners.Go(func() { tortureChurn(r.t, r.peerA, sa, torPoolV4[lo:hi], torPoolV6[lo:hi], outA) })
-		churners.Go(func() { tortureChurn(r.t, peerB, sb, torPoolV4[lo:hi], torPoolV6[lo:hi], outB) })
+		a := churn{
+			p:     r.peerA,
+			seed:  r.rng.Uint64(),
+			ownV4: torPoolV4[lo:hi],
+			ownV6: torPoolV6[lo:hi],
+			out:   &finalsA[i],
+		}
+
+		b := churn{
+			p:     peerB,
+			seed:  r.rng.Uint64(),
+			ownV4: torPoolV4[lo:hi],
+			ownV6: torPoolV6[lo:hi],
+			out:   &finalsB[i],
+		}
+
+		churners.Go(func() { tortureChurn(r.t, a) })
+		churners.Go(func() { tortureChurn(r.t, b) })
 	}
 
 	churners.Wait()
 
 	wantA, wantB := tortureExpect(r.staticB, finalsB), tortureExpect(r.staticA, finalsA)
-	waitFor(r.t, name+": table A to converge on B's final routes", func() bool {
+	waitFor(r.t, name+": table A to converge on B's final routes", r.changed, func() bool {
 		return tortureConverged(r.tableA, r.peerA, wantA)
 	})
-	waitFor(r.t, name+": table B to converge on A's final routes", func() bool {
+
+	waitFor(r.t, name+": table B to converge on A's final routes", r.changed, func() bool {
 		return tortureConverged(r.tableB, peerB, wantB)
 	})
 }
@@ -759,7 +846,10 @@ func tortureCaps(rng *rand.Rand) []bgp.Capability {
 				data[j] = byte(rng.Uint64())
 			}
 
-			cs = append(cs, bgp.Capability{Code: bgp.CapabilityCode(200 + i), Data: data})
+			cs = append(cs, bgp.Capability{
+				Code: bgp.CapabilityCode(200 + i),
+				Data: data,
+			})
 		}
 	}
 
@@ -810,35 +900,46 @@ func establishSignal(cfg *bgp.PeerConfig) <-chan struct{} {
 	return c
 }
 
-// runPeer runs p until the returned cancel is called, joined at cleanup.
+// runPeer runs p until the returned cancel is called, and joins its Run
+// goroutine at cleanup: Run's teardown logs through t.Output, which panics if
+// written after the test completes.
 func runPeer(t *testing.T, p *bgp.Peer) context.CancelFunc {
 	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = p.Run(ctx)
-	}()
+
+	var wg sync.WaitGroup
+	wg.Go(func() { _ = p.Run(ctx) })
+
 	t.Cleanup(func() {
 		cancel()
-		<-done
+		wg.Wait()
 	})
+
 	return cancel
 }
 
 // A churnFinal is one sender's final intended state per family.
 type churnFinal struct{ v4, v6 map[netip.Prefix]bool }
 
+// A churn is one sender's peer, random seed, and own disjoint prefix
+// partitions per family, and where it records its final state.
+type churn struct {
+	p            *bgp.Peer
+	seed         uint64
+	ownV4, ownV6 []netip.Prefix
+	out          *churnFinal
+}
+
 // tortureChurn runs one sender: random announcements, withdrawals, and
 // occasional route refreshes over its own disjoint prefix partitions, then
 // a settle pass driving every owned prefix to a random final state,
-// recorded in out.
-func tortureChurn(t *testing.T, p *bgp.Peer, seed uint64, ownV4, ownV6 []netip.Prefix, out *churnFinal) {
-	rng := rand.New(rand.NewPCG(seed, 0))
+// recorded in c.out.
+func tortureChurn(t *testing.T, c churn) {
+	rng := rand.New(rand.NewPCG(c.seed, 0))
 	ctx := t.Context()
-	out.v4, out.v6 = make(map[netip.Prefix]bool), make(map[netip.Prefix]bool)
+	c.out.v4, c.out.v6 = make(map[netip.Prefix]bool), make(map[netip.Prefix]bool)
 
 	send := func(u *bgp.Update) bool {
-		if err := p.SendUpdate(ctx, u); err != nil {
+		if err := c.p.SendUpdate(ctx, u); err != nil {
 			t.Errorf("send failed: %v", err)
 			return false
 		}
@@ -848,7 +949,10 @@ func tortureChurn(t *testing.T, p *bgp.Peer, seed uint64, ownV4, ownV6 []netip.P
 
 	announce := func(f bgp.Family, pre netip.Prefix) bool {
 		if f == v4u {
-			return send(&bgp.Update{NLRI: []netip.Prefix{pre}, Attributes: torAttrs})
+			return send(&bgp.Update{
+				NLRI:       []netip.Prefix{pre},
+				Attributes: torAttrs,
+			})
 		}
 
 		ras, err := bgp.MarshalAttributes(
@@ -873,7 +977,10 @@ func tortureChurn(t *testing.T, p *bgp.Peer, seed uint64, ownV4, ownV6 []netip.P
 			return send(&bgp.Update{Withdrawn: []netip.Prefix{pre}})
 		}
 
-		ras, err := bgp.MarshalAttributes(bgp.MPUnreachNLRI{Family: v6u, NLRI: bgp.Prefixes{pre}})
+		ras, err := bgp.MarshalAttributes(bgp.MPUnreachNLRI{
+			Family: v6u,
+			NLRI:   bgp.Prefixes{pre},
+		})
 		if err != nil {
 			t.Errorf("failed to build withdrawal: %v", err)
 			return false
@@ -883,9 +990,9 @@ func tortureChurn(t *testing.T, p *bgp.Peer, seed uint64, ownV4, ownV6 []netip.P
 	}
 
 	for range 25 {
-		f, own := v4u, ownV4
+		f, own := v4u, c.ownV4
 		if rng.IntN(2) == 0 {
-			f, own = v6u, ownV6
+			f, own = v6u, c.ownV6
 		}
 
 		pre := own[rng.IntN(len(own))]
@@ -901,7 +1008,7 @@ func tortureChurn(t *testing.T, p *bgp.Peer, seed uint64, ownV4, ownV6 []netip.P
 		}
 
 		if rng.IntN(8) == 0 {
-			if err := p.SendRouteRefresh(ctx, torFamilies[rng.IntN(len(torFamilies))]); err != nil {
+			if err := c.p.SendRouteRefresh(ctx, torFamilies[rng.IntN(len(torFamilies))]); err != nil {
 				t.Errorf("route refresh failed: %v", err)
 				return
 			}
@@ -913,10 +1020,10 @@ func tortureChurn(t *testing.T, p *bgp.Peer, seed uint64, ownV4, ownV6 []netip.P
 	}
 
 	// Settle: drive every owned prefix to a random final state.
-	for f, own := range map[bgp.Family][]netip.Prefix{v4u: ownV4, v6u: ownV6} {
-		final := out.v4
+	for f, own := range map[bgp.Family][]netip.Prefix{v4u: c.ownV4, v6u: c.ownV6} {
+		final := c.out.v4
 		if f == v6u {
-			final = out.v6
+			final = c.out.v6
 		}
 
 		for _, pre := range own {

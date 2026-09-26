@@ -9,22 +9,53 @@ func TestDialedSurvives(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name              string
-		localID, peerID   Identifier
-		localASN, peerASN uint32
-		want              bool
+		name        string
+		local, peer Open
+		want        bool
 	}{
-		{name: "local id higher", localID: 2, peerID: 1, want: true},
-		{name: "peer id higher", localID: 1, peerID: 2, want: false},
-		{name: "equal id, local ASN higher", localID: 1, peerID: 1, localASN: 2, peerASN: 1, want: true},
-		{name: "equal id, peer ASN higher", localID: 1, peerID: 1, localASN: 1, peerASN: 2, want: false},
+		{
+			name:  "local id higher",
+			local: Open{ID: 2},
+			peer:  Open{ID: 1},
+			want:  true,
+		},
+		{
+			name:  "peer id higher",
+			local: Open{ID: 1},
+			peer:  Open{ID: 2},
+			want:  false,
+		},
+		{
+			name: "equal id, local ASN higher",
+			local: Open{
+				ID:  1,
+				ASN: 2,
+			},
+			peer: Open{
+				ID:  1,
+				ASN: 1,
+			},
+			want: true,
+		},
+		{
+			name: "equal id, peer ASN higher",
+			local: Open{
+				ID:  1,
+				ASN: 1,
+			},
+			peer: Open{
+				ID:  1,
+				ASN: 2,
+			},
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := dialedSurvives(tt.localID, tt.peerID, tt.localASN, tt.peerASN)
+			got := dialedSurvives(&tt.local, &tt.peer)
 			if got != tt.want {
 				t.Fatalf("want dialed survives %t, got %t", tt.want, got)
 			}
@@ -36,8 +67,15 @@ func TestNegotiatedFamilies(t *testing.T) {
 	t.Parallel()
 
 	var (
-		v4u = Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
-		v6u = Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+		v4u = Family{
+			AFI:  AFIIPv4,
+			SAFI: SAFIUnicast,
+		}
+
+		v6u = Family{
+			AFI:  AFIIPv6,
+			SAFI: SAFIUnicast,
+		}
 	)
 
 	tests := []struct {
@@ -70,7 +108,10 @@ func TestNegotiatedFamilies(t *testing.T) {
 			name: "malformed capability skipped",
 			ours: []Family{v4u},
 			caps: []Capability{
-				{Code: CapabilityMultiprotocol, Data: []byte{0xff}},
+				{
+					Code: CapabilityMultiprotocol,
+					Data: []byte{0xff},
+				},
 				MultiprotocolCapability(v4u),
 			},
 			want: []Family{v4u},
@@ -98,12 +139,34 @@ func TestNegotiatedAddPath(t *testing.T) {
 	t.Parallel()
 
 	var (
-		v4u = Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
-		v6u = Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+		v4u = Family{
+			AFI:  AFIIPv4,
+			SAFI: SAFIUnicast,
+		}
+
+		v6u = Family{
+			AFI:  AFIIPv6,
+			SAFI: SAFIUnicast,
+		}
 	)
 
 	fams := []Family{v4u, v6u}
 	cap1 := func(f AddPathFamily) Capability { return must(AddPathCapability(f)) }
+
+	// Both directions for a family, the common configuration.
+	var (
+		v4uBoth = AddPathFamily{
+			Family:  v4u,
+			Send:    true,
+			Receive: true,
+		}
+
+		v6uBoth = AddPathFamily{
+			Family:  v6u,
+			Send:    true,
+			Receive: true,
+		}
+	)
 
 	tests := []struct {
 		name string
@@ -115,11 +178,11 @@ func TestNegotiatedAddPath(t *testing.T) {
 		{
 			name: "not configured",
 			fams: fams,
-			caps: []Capability{cap1(AddPathFamily{Family: v4u, Send: true, Receive: true})},
+			caps: []Capability{cap1(v4uBoth)},
 		},
 		{
 			name: "peer without capability",
-			ours: []AddPathFamily{{Family: v4u, Send: true, Receive: true}},
+			ours: []AddPathFamily{v4uBoth},
 			fams: fams,
 		},
 		{
@@ -127,39 +190,63 @@ func TestNegotiatedAddPath(t *testing.T) {
 			// Send, per direction and per family.
 			name: "directions crossed",
 			ours: []AddPathFamily{
-				{Family: v4u, Send: true, Receive: true},
-				{Family: v6u, Send: true},
+				v4uBoth,
+				{
+					Family: v6u,
+					Send:   true,
+				},
 			},
 			fams: fams,
 			caps: []Capability{must(AddPathCapability(
-				AddPathFamily{Family: v4u, Send: true},
-				AddPathFamily{Family: v6u, Send: true},
+				AddPathFamily{
+					Family: v4u,
+					Send:   true,
+				},
+				AddPathFamily{
+					Family: v6u,
+					Send:   true,
+				},
 			))},
-			want: []AddPathFamily{{Family: v4u, Receive: true}},
+			want: []AddPathFamily{{
+				Family:  v4u,
+				Receive: true,
+			}},
 		},
 		{
 			name: "family not negotiated",
-			ours: []AddPathFamily{{Family: v6u, Send: true, Receive: true}},
+			ours: []AddPathFamily{v6uBoth},
 			fams: []Family{v4u},
-			caps: []Capability{cap1(AddPathFamily{Family: v6u, Send: true, Receive: true})},
+			caps: []Capability{cap1(v6uBoth)},
 		},
 		{
 			name: "malformed capability skipped",
-			ours: []AddPathFamily{{Family: v4u, Send: true, Receive: true}},
+			ours: []AddPathFamily{v4uBoth},
 			fams: fams,
-			caps: []Capability{{Code: CapabilityAddPath, Data: []byte{0xff}}},
+			caps: []Capability{{
+				Code: CapabilityAddPath,
+				Data: []byte{0xff},
+			}},
 		},
 		{
 			// RFC 7911 forbids duplicate families, so the first entry wins
 			// on receipt.
 			name: "peer duplicate first wins",
-			ours: []AddPathFamily{{Family: v4u, Send: true, Receive: true}},
+			ours: []AddPathFamily{v4uBoth},
 			fams: fams,
 			caps: []Capability{must(AddPathCapability(
-				AddPathFamily{Family: v4u, Receive: true},
-				AddPathFamily{Family: v4u, Send: true},
+				AddPathFamily{
+					Family:  v4u,
+					Receive: true,
+				},
+				AddPathFamily{
+					Family: v4u,
+					Send:   true,
+				},
 			))},
-			want: []AddPathFamily{{Family: v4u, Send: true}},
+			want: []AddPathFamily{{
+				Family: v4u,
+				Send:   true,
+			}},
 		},
 	}
 
@@ -178,18 +265,28 @@ func TestExtendedNextHopFamilies(t *testing.T) {
 	t.Parallel()
 
 	var (
-		v4u = Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
-		v4m = Family{AFI: AFIIPv4, SAFI: SAFIMulticast}
+		v4u = Family{
+			AFI:  AFIIPv4,
+			SAFI: SAFIUnicast,
+		}
+
+		v4m = Family{
+			AFI:  AFIIPv4,
+			SAFI: SAFIMulticast,
+		}
 	)
 
 	// A well-formed capability for two families, plus a hand-built entry
 	// whose next hop AFI is not IPv6 and trailing garbage, both ignored.
 	caps := []Capability{
 		ExtendedNextHopCapability(v4u, v4m),
-		{Code: CapabilityExtendedNextHop, Data: []byte{
-			0, 1, 0, 1, 0, 1, // IPv4 unicast with an IPv4 next hop: skipped
-			0xff, // truncated trailing byte: ignored
-		}},
+		{
+			Code: CapabilityExtendedNextHop,
+			Data: []byte{
+				0, 1, 0, 1, 0, 1, // IPv4 unicast with an IPv4 next hop: skipped
+				0xff, // truncated trailing byte: ignored
+			},
+		},
 	}
 
 	if d := diff(t, []Family{v4u, v4m}, extendedNextHopFamilies(caps)); d != "" {
@@ -200,14 +297,22 @@ func TestExtendedNextHopFamilies(t *testing.T) {
 func TestLongLivedGracefulRestart(t *testing.T) {
 	t.Parallel()
 
-	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
+	v4u := Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIUnicast,
+	}
+
+	malformed := Capability{
+		Code: CapabilityLongLivedGracefulRestart,
+		Data: []byte{0x00, 0x01, 0x01},
+	}
 
 	// No capability at all, or only a malformed one, decodes to nil, exactly
 	// as gracefulRestart treats the RFC 4724 capability.
 	for _, caps := range [][]Capability{
 		nil,
 		{MultiprotocolCapability(v4u), must(GracefulRestartCapability(GracefulRestart{}))},
-		{{Code: CapabilityLongLivedGracefulRestart, Data: []byte{0x00, 0x01, 0x01}}},
+		{malformed},
 	} {
 		if got := longLivedGracefulRestart(caps); got != nil {
 			t.Fatalf("expected no long-lived graceful restart for %v, but got: %+v", caps, got)
@@ -219,12 +324,16 @@ func TestLongLivedGracefulRestart(t *testing.T) {
 	// section 4.1 pairing is the caller's to honor.
 	want := LongLivedGracefulRestart{
 		Families: []LongLivedGracefulRestartFamily{
-			{Family: v4u, ForwardingPreserved: true, StaleTime: time.Hour},
+			{
+				Family:              v4u,
+				ForwardingPreserved: true,
+				StaleTime:           time.Hour,
+			},
 		},
 	}
 
 	caps := []Capability{
-		{Code: CapabilityLongLivedGracefulRestart, Data: []byte{0x00, 0x01, 0x01}},
+		malformed,
 		must(LongLivedGracefulRestartCapability(want)),
 		must(LongLivedGracefulRestartCapability(LongLivedGracefulRestart{})),
 	}

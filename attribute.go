@@ -47,6 +47,13 @@ const (
 	AttrOTC                 AttrType = 35
 )
 
+// ErrUnknownAttribute is the error RawAttribute.Parse wraps for an attribute
+// of a type this package does not interpret. It is a plain error, not a
+// *MessageError: an unrecognized attribute is not a protocol error, and a
+// caller tests for it with errors.Is to pass the attribute along in raw form
+// rather than treat it as malformed.
+var ErrUnknownAttribute = errors.New("bgp: cannot parse attribute of unknown type")
+
 // A RawAttribute is a BGP path attribute in raw binary form, as carried in an
 // Update. Parse decodes a RawAttribute into one of this package's Attribute
 // types, at the cost of additional allocations; callers which do not inspect
@@ -191,13 +198,6 @@ func (a RawAttribute) parse() (Attribute, error) {
 		return nil, fmt.Errorf("%w %d", ErrUnknownAttribute, uint8(a.Type))
 	}
 }
-
-// ErrUnknownAttribute is the error RawAttribute.Parse wraps for an attribute
-// of a type this package does not interpret. It is a plain error, not a
-// *MessageError: an unrecognized attribute is not a protocol error, and a
-// caller tests for it with errors.Is to pass the attribute along in raw form
-// rather than treat it as malformed.
-var ErrUnknownAttribute = errors.New("bgp: cannot parse attribute of unknown type")
 
 // mpFamily returns the address family a multiprotocol attribute names in
 // its first three data bytes. It returns false for an attribute of any
@@ -384,6 +384,7 @@ func parseRawAttributes(b []byte) (RawAttributes, *MessageError) {
 		} else {
 			n = 3 + int(r[2])
 		}
+
 		if n > len(r) {
 			break
 		}
@@ -527,13 +528,14 @@ func (o Origin) appendData(b []byte) ([]byte, error) {
 	return append(b, byte(o)), nil
 }
 
-// An ASPath is the AS_PATH attribute: the autonomous systems through which
-// routing information in an Update has passed.
-//
-// ASNs are always encoded in four-octet form, per RFC 6793. Sessions with
-// speakers which do not support the Four-Octet AS Number capability are not
-// supported by this package.
-type ASPath []ASSegment
+// Wire values for AS path segment types. The confederation types are RFC
+// 5065, section 3.
+const (
+	asSet            = 1
+	asSequence       = 2
+	asConfedSequence = 3
+	asConfedSet      = 4
+)
 
 // An ASSegment is a single segment of an ASPath. Set and Confed select
 // among the four wire segment types: the zero value is an ordered
@@ -578,6 +580,14 @@ type OriginAS struct {
 	Empty bool
 }
 
+// An ASPath is the AS_PATH attribute: the autonomous systems through which
+// routing information in an Update has passed.
+//
+// ASNs are always encoded in four-octet form, per RFC 6793. Sessions with
+// speakers which do not support the Four-Octet AS Number capability are not
+// supported by this package.
+type ASPath []ASSegment
+
 // Origin returns the origin autonomous system the path names, per RFC 6811,
 // section 2. Confederation segments never name an origin: they are the
 // path's intra-confederation record, so they are skipped, and a path of
@@ -601,15 +611,6 @@ func (p ASPath) Origin() OriginAS {
 
 	return OriginAS{Empty: true}
 }
-
-// Wire values for AS path segment types. The confederation types are RFC
-// 5065, section 3.
-const (
-	asSet            = 1
-	asSequence       = 2
-	asConfedSequence = 3
-	asConfedSet      = 4
-)
 
 func (ASPath) attrType() AttrType   { return AttrASPath }
 func (ASPath) attrFlags() AttrFlags { return AttrFlagTransitive }
@@ -680,7 +681,11 @@ func parseASPath(b []byte) (ASPath, error) {
 			asns = append(asns, binary.BigEndian.Uint32(b[4*i:]))
 		}
 
-		p = append(p, ASSegment{Set: set, Confed: confed, ASNs: asns})
+		p = append(p, ASSegment{
+			Set:    set,
+			Confed: confed,
+			ASNs:   asns,
+		})
 		b = b[4*n:]
 	}
 
@@ -793,7 +798,7 @@ func (cl ClusterList) appendData(b []byte) ([]byte, error) {
 // An OTC is the OTC (Only to Customer) attribute: the autonomous system
 // beyond which a route must only propagate toward customers, used to detect
 // and prevent route leaks, as described in RFC 9234. The role negotiation
-// half of RFC 9234 (an OPEN capability) is out of scope for this package;
+// half of RFC 9234, an OPEN capability, is out of scope for this package;
 // the attribute is meaningful standalone.
 type OTC uint32
 

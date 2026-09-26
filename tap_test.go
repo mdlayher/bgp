@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -15,67 +16,6 @@ import (
 
 	"github.com/mdlayher/bgp/internal/mrt"
 )
-
-// A tapLog collects MessageEvents from a tap, which may fire from several
-// goroutines at once, and reports each direction's stream in order.
-type tapLog struct {
-	mu     sync.Mutex
-	events []MessageEvent
-}
-
-func (l *tapLog) tap(e MessageEvent) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.events = append(l.events, e)
-}
-
-// clear forgets every event observed so far.
-func (l *tapLog) clear() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.events = nil
-}
-
-// types returns the message types observed in dir, in order, with a nil
-// Message rendered as its error's type so malformed frames stand out.
-func (l *tapLog) types(dir Direction) []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	var out []string
-	for _, e := range l.events {
-		if e.Direction != dir {
-			continue
-		}
-
-		switch {
-		case e.Message != nil:
-			out = append(out, e.Message.messageType().String())
-		case e.Err != nil:
-			out = append(out, "error")
-		default:
-			out = append(out, "nil")
-		}
-	}
-
-	return out
-}
-
-// find returns the first event in dir whose Message is of type T.
-func find[T Message](tb testing.TB, l *tapLog, dir Direction) MessageEvent {
-	tb.Helper()
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for _, e := range l.events {
-		if _, ok := e.Message.(T); ok && e.Direction == dir {
-			return e
-		}
-	}
-
-	tb.Fatalf("no %s event of type %T", dir, *new(T))
-	panic("unreachable")
-}
 
 // TestConnTap exercises the tap at the Conn: both directions of a well-formed
 // message, the two malformed read cases, a failed write, and the marshal
@@ -105,14 +45,23 @@ func TestConnTap(t *testing.T) {
 		l    *tapLog
 		dir  Direction
 	}{
-		{name: "sent", l: &la, dir: DirectionSent},
-		{name: "received", l: &lb, dir: DirectionReceived},
+		{
+			name: "sent",
+			l:    &la,
+			dir:  DirectionSent,
+		},
+		{
+			name: "received",
+			l:    &lb,
+			dir:  DirectionReceived,
+		},
 	} {
-		if n := len(tt.l.events); n != 1 {
+		events := tt.l.snapshot()
+		if n := len(events); n != 1 {
 			t.Fatalf("%s: expected 1 event, got %d", tt.name, n)
 		}
 
-		e := tt.l.events[0]
+		e := events[0]
 		if e.Direction != tt.dir || !bytes.Equal(e.Raw, raw) || e.Err != nil {
 			t.Fatalf("%s: unexpected event: %+v", tt.name, e)
 		}
@@ -131,7 +80,7 @@ func TestConnTap(t *testing.T) {
 		t.Fatal("expected a marshal error, but none occurred")
 	}
 
-	if n := len(la.events); n != 1 {
+	if n := len(la.snapshot()); n != 1 {
 		t.Fatalf("a marshal failure fired the tap: %d events", n)
 	}
 
@@ -146,7 +95,7 @@ func TestConnTap(t *testing.T) {
 		t.Fatal("expected a parse error, but none occurred")
 	}
 
-	e := lb.events[len(lb.events)-1]
+	e := lastEvent(t, &lb)
 	if e.Message != nil || !bytes.Equal(e.Raw, bad) {
 		t.Fatalf("unexpected malformed event: %+v", e)
 	}
@@ -173,7 +122,7 @@ func TestConnTap(t *testing.T) {
 		t.Fatal("expected a header error, but none occurred")
 	}
 
-	e = lb.events[len(lb.events)-1]
+	e = lastEvent(t, &lb)
 	if !bytes.Equal(e.Raw, hdr[:headerLen]) {
 		t.Fatalf("unexpected bad-length event raw bytes: % x", e.Raw)
 	}
@@ -193,7 +142,7 @@ func TestConnTap(t *testing.T) {
 		t.Fatal("expected a write error, but none occurred")
 	}
 
-	e = la.events[len(la.events)-1]
+	e = lastEvent(t, &la)
 	if e.Direction != DirectionSent || e.Err == nil || !bytes.Equal(e.Raw, mustMessage(t, &Keepalive{})) {
 		t.Fatalf("unexpected failed write event: %+v", e)
 	}
@@ -209,12 +158,12 @@ func TestConnTap(t *testing.T) {
 
 		_ = a.Close()
 
-		before := len(lb.events)
+		before := len(lb.snapshot())
 		if _, err := cb.ReadMessage(); !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
 			t.Fatalf("unexpected read error after close: %v", err)
 		}
 
-		if len(lb.events) != before {
+		if len(lb.snapshot()) != before {
 			t.Fatal("a closed connection fired the tap")
 		}
 	}
@@ -258,7 +207,10 @@ func TestPeerOnMessage(t *testing.T) {
 			t.Fatalf("unexpected UPDATE at the peer (-want +got):\n%s", d)
 		}
 
-		s.write(&Notification{Code: NotificationCease, Subcode: SubcodeCeaseAdministrativeReset})
+		s.write(&Notification{
+			Code:    NotificationCease,
+			Subcode: SubcodeCeaseAdministrativeReset,
+		})
 		recv(t, r.closeC, "session close")
 
 		want := map[Direction][]string{
@@ -284,9 +236,7 @@ func TestPeerOnMessage(t *testing.T) {
 
 		// The next attempt: a malformed UPDATE fires with its error, and
 		// the NOTIFICATION answering it is observed on the sent stream.
-		l.mu.Lock()
-		l.events = nil
-		l.mu.Unlock()
+		l.clear()
 
 		time.Sleep(idleHoldTime)
 		s = r.acceptScript()
@@ -417,7 +367,10 @@ func TestPeerOnMessageOwnsValues(t *testing.T) {
 
 	buf := []byte{0x01, 0x02, 0x03, 0x04}
 	borrowed := &Update{
-		Attributes: RawAttributes{{Type: AttrCommunities, Data: buf}},
+		Attributes: RawAttributes{{
+			Type: AttrCommunities,
+			Data: buf,
+		}},
 	}
 
 	p.fsm.cfg.OnMessage(p.fsm, MessageEvent{
@@ -459,7 +412,13 @@ func TestPeerOnMessageMRT(t *testing.T) {
 	// message is recorded from the local speaker's side.
 	session := func(e MessageEvent, s Session) mrt.Session {
 		la, ra := e.LocalAddr.(*net.TCPAddr).AddrPort().Addr(), e.RemoteAddr.(*net.TCPAddr).AddrPort().Addr()
-		ms := mrt.Session{PeerASN: s.Peer.ASN, LocalASN: s.Local.ASN, Peer: ra, Local: la}
+		ms := mrt.Session{
+			PeerASN:  s.Peer.ASN,
+			LocalASN: s.Local.ASN,
+			Peer:     ra,
+			Local:    la,
+		}
+
 		if e.Direction == DirectionSent {
 			ms.PeerASN, ms.LocalASN, ms.Peer, ms.Local = ms.LocalASN, ms.PeerASN, ms.Local, ms.Peer
 		}
@@ -486,7 +445,10 @@ func TestPeerOnMessageMRT(t *testing.T) {
 			// ASNs are all the writer needs from it.
 			s := sess
 			if s.Peer == nil {
-				s = Session{Peer: &Open{ASN: 64497}, Local: &Open{ASN: 64496}}
+				s = Session{
+					Peer:  &Open{ASN: 64497},
+					Local: &Open{ASN: 64496},
+				}
 			}
 
 			if err := w.WriteMessage(time.Now(), session(e, s), e.Raw); err != nil {
@@ -499,9 +461,12 @@ func TestPeerOnMessageMRT(t *testing.T) {
 			mu.Lock()
 			defer mu.Unlock()
 			ms := mrt.Session{
-				PeerASN: 64497, LocalASN: 64496,
-				Peer: netip.MustParseAddr("127.0.0.1"), Local: netip.MustParseAddr("127.0.0.1"),
+				PeerASN:  64497,
+				LocalASN: 64496,
+				Peer:     netip.MustParseAddr("127.0.0.1"),
+				Local:    netip.MustParseAddr("127.0.0.1"),
 			}
+
 			if err := w.WriteStateChange(time.Now(), ms, uint16(from), uint16(to)); err != nil {
 				t.Errorf("failed to write MRT state change: %v", err)
 			}
@@ -519,7 +484,10 @@ func TestPeerOnMessageMRT(t *testing.T) {
 	}
 
 	_ = s.read()
-	s.write(&Notification{Code: NotificationCease, Subcode: SubcodeCeaseAdministrativeShutdown})
+	s.write(&Notification{
+		Code:    NotificationCease,
+		Subcode: SubcodeCeaseAdministrativeShutdown,
+	})
 	recv(t, r.closeC, "session close")
 
 	mu.Lock()
@@ -555,4 +523,82 @@ func TestPeerOnMessageMRT(t *testing.T) {
 			t.Fatalf("MRT message %d does not parse: %v", i, err)
 		}
 	}
+}
+
+// A tapLog collects MessageEvents from a tap, which may fire from several
+// goroutines at once, and reports each direction's stream in order.
+type tapLog struct {
+	mu     sync.Mutex
+	events []MessageEvent
+}
+
+func (l *tapLog) tap(e MessageEvent) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = append(l.events, e)
+}
+
+// snapshot returns a copy of every event observed so far, in order.
+func (l *tapLog) snapshot() []MessageEvent {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.events)
+}
+
+// clear forgets every event observed so far.
+func (l *tapLog) clear() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = nil
+}
+
+// types returns the message types observed in dir, in order, with a nil
+// Message rendered as its error's type so malformed frames stand out.
+func (l *tapLog) types(dir Direction) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	var out []string
+	for _, e := range l.events {
+		if e.Direction != dir {
+			continue
+		}
+
+		switch {
+		case e.Message != nil:
+			out = append(out, e.Message.messageType().String())
+		case e.Err != nil:
+			out = append(out, "error")
+		default:
+			out = append(out, "nil")
+		}
+	}
+
+	return out
+}
+
+// find returns the first event in dir whose Message is of type T.
+func find[T Message](tb testing.TB, l *tapLog, dir Direction) MessageEvent {
+	tb.Helper()
+
+	for _, e := range l.snapshot() {
+		if _, ok := e.Message.(T); ok && e.Direction == dir {
+			return e
+		}
+	}
+
+	tb.Fatalf("no %s event of type %T", dir, *new(T))
+	panic("unreachable")
+}
+
+// lastEvent returns the most recent event l observed.
+func lastEvent(tb testing.TB, l *tapLog) MessageEvent {
+	tb.Helper()
+
+	events := l.snapshot()
+	if len(events) == 0 {
+		tb.Fatal("the tap observed no events")
+	}
+
+	return events[len(events)-1]
 }

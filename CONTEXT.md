@@ -1,6 +1,6 @@
 # bgp
 
-A Go library for the BGP-4 wire format and, eventually, sessions: message
+A Go library for the BGP-4 wire format and sessions: message
 encode/decode plus a boring RFC 4271 state machine. Never a RIB, never a
 policy engine.
 
@@ -92,7 +92,7 @@ value. Only the common route target and route origin forms are
 interpreted, for display and construction.
 
 **Family**:
-An address family identified by an AFI/SAFI pair (e.g. IPv6 unicast).
+An address family identified by an AFI/SAFI pair, such as IPv6 unicast.
 _Avoid_: AFI alone when the SAFI matters
 
 **FSM**:

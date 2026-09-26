@@ -199,7 +199,11 @@ func (o *Open) parseCapabilities(caps []byte) error {
 			return openError(0, nil, "OPEN capability truncated")
 		}
 
-		c := Capability{Code: code, Data: caps[2 : 2+n : 2+n]}
+		c := Capability{
+			Code: code,
+			Data: caps[2 : 2+n : 2+n],
+		}
+
 		if code == CapabilityFourOctetAS {
 			// Consume the speaker's 4 byte ASN directly; see [Open.ASN].
 			if n != 4 {
@@ -249,7 +253,10 @@ type Capability struct {
 func MultiprotocolCapability(f Family) Capability {
 	data := binary.BigEndian.AppendUint16(make([]byte, 0, 4), uint16(f.AFI))
 	data = append(data, 0, byte(f.SAFI))
-	return Capability{Code: CapabilityMultiprotocol, Data: data}
+	return Capability{
+		Code: CapabilityMultiprotocol,
+		Data: data,
+	}
 }
 
 // Multiprotocol parses the address family advertised by a
@@ -280,7 +287,10 @@ func ExtendedNextHopCapability(fs ...Family) Capability {
 		data = binary.BigEndian.AppendUint16(data, uint16(AFIIPv6))
 	}
 
-	return Capability{Code: CapabilityExtendedNextHop, Data: data}
+	return Capability{
+		Code: CapabilityExtendedNextHop,
+		Data: data,
+	}
 }
 
 // ExtendedNextHop parses the address families for which a
@@ -388,7 +398,10 @@ func GracefulRestartCapability(gr GracefulRestart) (Capability, error) {
 		b = append(b, byte(f.Family.SAFI), flags)
 	}
 
-	return Capability{Code: CapabilityGracefulRestart, Data: b}, nil
+	return Capability{
+		Code: CapabilityGracefulRestart,
+		Data: b,
+	}, nil
 }
 
 // GracefulRestart parses the content of a CapabilityGracefulRestart
@@ -486,7 +499,10 @@ func LongLivedGracefulRestartCapability(llgr LongLivedGracefulRestart) (Capabili
 		b = append(b, byte(secs>>16), byte(secs>>8), byte(secs))
 	}
 
-	return Capability{Code: CapabilityLongLivedGracefulRestart, Data: b}, nil
+	return Capability{
+		Code: CapabilityLongLivedGracefulRestart,
+		Data: b,
+	}, nil
 }
 
 // LongLivedGracefulRestart parses the content of a
@@ -565,7 +581,10 @@ func AddPathCapability(fs ...AddPathFamily) (Capability, error) {
 		b = append(b, sr)
 	}
 
-	return Capability{Code: CapabilityAddPath, Data: b}, nil
+	return Capability{
+		Code: CapabilityAddPath,
+		Data: b,
+	}, nil
 }
 
 // AddPath parses the families and directions a CapabilityAddPath Capability
@@ -621,7 +640,10 @@ func FQDNCapability(hostname, domain string) (Capability, error) {
 	b = append(b, hostname...)
 	b = append(b, byte(len(domain)))
 	b = append(b, domain...)
-	return Capability{Code: CapabilityFQDN, Data: b}, nil
+	return Capability{
+		Code: CapabilityFQDN,
+		Data: b,
+	}, nil
 }
 
 // FQDN parses the hostname and domain name a CapabilityFQDN Capability

@@ -66,12 +66,12 @@ type fsmConn struct {
 	readerDone chan struct{}
 
 	// holdT bounds the peer's silence on this connection, per RFC 4271,
-	// section 8.2.2: armed at the OpenSent "large value" (openHoldTime)
-	// when the connection starts — each connection carries a full budget,
+	// section 8.2.2. It is armed at the OpenSent "large value"
+	// (openHoldTime) when the connection starts, reset to the negotiated
+	// hold time on entering OpenConfirm, and reset again as the session's
+	// hold timer at establishment. Each connection carries a full budget,
 	// so a late collision connection does not inherit an earlier one's
-	// nearly spent timer — reset to the negotiated hold time on entering
-	// OpenConfirm, and reset again as the session's hold timer at
-	// establishment. keepaliveT feeds the peer's own hold timer at a
+	// nearly spent timer. keepaliveT feeds the peer's own hold timer at a
 	// jittered third of the negotiated hold: like attempt.connectRetryT it
 	// exists, stopped, from construction, so no arm needs a nil check, and
 	// is armed when the peer's OPEN is accepted. kill stops both.
@@ -100,7 +100,7 @@ type fsmConn struct {
 	// clock step cannot distort the hold timer.
 	base time.Time
 
-	// The two reader-owned atomics; see the package concurrency note above.
+	// The two reader-owned atomics; see the concurrency note atop attempt.go.
 	lastRecv  atomic.Int64 // nanoseconds since base of the last received message
 	inHandler atomic.Bool
 }
@@ -204,7 +204,13 @@ func (f *FSM) readConn(fc *fsmConn) {
 	for {
 		r, err := fc.c.ReadMessage()
 		fc.lastRecv.Store(fc.sinceBase())
-		if !f.forward(fc, connEvent{fc: fc, msg: r.Message, err: err}) || err != nil {
+		ev := connEvent{
+			fc:  fc,
+			msg: r.Message,
+			err: err,
+		}
+
+		if !f.forward(fc, ev) || err != nil {
 			return
 		}
 
@@ -242,17 +248,16 @@ func (f *FSM) readSession(fc *fsmConn) {
 			return true
 		}
 
-		ev := connEvent{
+		f.forward(fc, connEvent{
 			fc:         fc,
 			handlerErr: err,
-		}
+		})
 
-		f.forward(fc, ev)
 		return false
 	}
 
-	if h := f.cfg.OnEstablished; h != nil {
-		if !handle(func() error { return h(fc.sessCtx, f, fc.sess) }) {
+	if f.cfg.OnEstablished != nil {
+		if !handle(func() error { return f.cfg.OnEstablished(fc.sessCtx, f, fc.sess) }) {
 			return
 		}
 	}
@@ -261,7 +266,11 @@ func (f *FSM) readSession(fc *fsmConn) {
 		r, err := fc.c.ReadMessage()
 		fc.lastRecv.Store(fc.sinceBase())
 		if err != nil {
-			f.forward(fc, connEvent{fc: fc, err: err})
+			f.forward(fc, connEvent{
+				fc:  fc,
+				err: err,
+			})
+
 			return
 		}
 
@@ -276,11 +285,11 @@ func (f *FSM) readSession(fc *fsmConn) {
 
 		switch m := r.Message.(type) {
 		case *Keepalive:
-			if h := f.cfg.OnKeepalive; h != nil && !handle(func() error { return h(fc.sessCtx, f) }) {
+			if f.cfg.OnKeepalive != nil && !handle(func() error { return f.cfg.OnKeepalive(fc.sessCtx, f) }) {
 				return
 			}
 		case *Update:
-			if h := f.cfg.OnUpdate; h != nil && !handle(func() error { return h(fc.sessCtx, f, m, r.Diagnostics) }) {
+			if f.cfg.OnUpdate != nil && !handle(func() error { return f.cfg.OnUpdate(fc.sessCtx, f, m, r.Diagnostics) }) {
 				return
 			}
 		case *RouteRefresh:
@@ -288,13 +297,17 @@ func (f *FSM) readSession(fc *fsmConn) {
 				continue
 			}
 
-			if h := f.cfg.OnRouteRefresh; h != nil && !handle(func() error { return h(fc.sessCtx, f, m) }) {
+			if f.cfg.OnRouteRefresh != nil && !handle(func() error { return f.cfg.OnRouteRefresh(fc.sessCtx, f, m) }) {
 				return
 			}
 		default:
 			// OPEN or NOTIFICATION mid-session: terminal either way, and the
 			// FSM goroutine owns the response.
-			f.forward(fc, connEvent{fc: fc, msg: m})
+			f.forward(fc, connEvent{
+				fc:  fc,
+				msg: m,
+			})
+
 			return
 		}
 	}
@@ -349,11 +362,11 @@ type sendReq struct {
 }
 
 // A sessionWriter links callers and the FSM to an established session's
-// writer goroutine: sendC is the callers' unbuffered rendezvous, keepaliveC
-// carries the FSM's keepalive nudges without blocking it — distinct from
-// fsmConn.keepaliveC, the timer tick which prompts them — and exited is
-// closed by the writer as it exits. It exists only while a session does; see
-// fsmConn.writer.
+// writer goroutine. sendC is the callers' unbuffered rendezvous.
+// keepaliveC carries the FSM's keepalive nudges without blocking it; it is
+// distinct from fsmConn.keepaliveC, the timer tick which prompts them.
+// exited is closed by the writer as it exits. A sessionWriter exists only
+// while a session does; see fsmConn.writer.
 type sessionWriter struct {
 	sendC      chan sendReq
 	keepaliveC chan struct{}
@@ -386,12 +399,22 @@ func (f *FSM) writeSession(fc *fsmConn) {
 			err := write(req.m)
 			req.doneC <- err
 			if err != nil && !isMarshalError(err) {
-				f.forward(fc, connEvent{fc: fc, err: err, local: true})
+				f.forward(fc, connEvent{
+					fc:    fc,
+					err:   err,
+					local: true,
+				})
+
 				return
 			}
 		case <-fc.writer.keepaliveC:
 			if err := write(&Keepalive{}); err != nil {
-				f.forward(fc, connEvent{fc: fc, err: err, local: true})
+				f.forward(fc, connEvent{
+					fc:    fc,
+					err:   err,
+					local: true,
+				})
+
 				return
 			}
 		case <-fc.fsmDone:

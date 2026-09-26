@@ -3,6 +3,7 @@ package bgp
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -10,7 +11,7 @@ import (
 
 // TestPeerResetSessionAdministrativeReset verifies the default reset: a nil
 // cause ends the established session with Cease / Administrative Reset, the
-// close is reported, and the Peer's retry loop establishes a fresh session —
+// close is reported, and the Peer's retry loop establishes a fresh session:
 // the bounce, not a removal.
 func TestPeerResetSessionAdministrativeReset(t *testing.T) {
 	t.Parallel()
@@ -80,11 +81,16 @@ func TestPeerResetSessionBFDDown(t *testing.T) {
 		// signal.
 		bfdDownC := make(chan struct{})
 
+		// Registered before the rig, so the watcher is joined after the
+		// rig's teardown has canceled the session context it obeys.
+		var wg sync.WaitGroup
+		t.Cleanup(wg.Wait)
+
 		r := newPipeRig(t, PeerConfig{
 			OnEstablished: func(ctx context.Context, p *Peer, s Session) error {
 				// The watcher runs on its own goroutine, as ResetSession's
 				// handler ban requires.
-				go func() {
+				wg.Go(func() {
 					select {
 					case <-bfdDownC:
 						cause := &MessageError{
@@ -95,7 +101,8 @@ func TestPeerResetSessionBFDDown(t *testing.T) {
 						_ = p.ResetSession(ctx, cause)
 					case <-ctx.Done():
 					}
-				}()
+				})
+
 				return nil
 			},
 		})
@@ -125,11 +132,11 @@ func TestPeerResetSessionBFDDown(t *testing.T) {
 }
 
 // TestPeerIdleHoldAdoptsDeliveredConn verifies the hold's adoption contract:
-// a connection
-// delivered during the idle hold ends the hold early and seeds the next
-// attempt, rather than being answered with Cease / Connection Rejected —
-// the escape from the mutual-rejection livelock two speakers whose
-// sessions closed together would otherwise alternate into forever.
+// a connection delivered during the idle hold ends the hold early and seeds
+// the next attempt, rather than being answered with Cease / Connection
+// Rejected. This is the escape from the mutual-rejection livelock two
+// speakers whose sessions closed together would otherwise alternate into
+// forever.
 func TestPeerIdleHoldAdoptsDeliveredConn(t *testing.T) {
 	t.Parallel()
 

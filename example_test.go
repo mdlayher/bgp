@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"sync"
 	"syscall"
 	"time"
 
@@ -96,7 +97,10 @@ func Example() {
 // multiprotocol capability (RFC 4760), and reachability travels in an
 // MP_REACH_NLRI attribute rather than the UPDATE's IPv4 NLRI field.
 func Example_multiprotocol() {
-	v6 := bgp.Family{AFI: bgp.AFIIPv6, SAFI: bgp.SAFIUnicast}
+	v6 := bgp.Family{
+		AFI:  bgp.AFIIPv6,
+		SAFI: bgp.SAFIUnicast,
+	}
 
 	attrs, err := bgp.MarshalAttributes(
 		bgp.OriginIGP,
@@ -138,8 +142,15 @@ func Example_multiprotocol() {
 // family announced in its own MP_REACH_NLRI and ended with its own
 // End-of-RIB. Received routes are found by attribute type with Lookup.
 func Example_dualStack() {
-	v4 := bgp.Family{AFI: bgp.AFIIPv4, SAFI: bgp.SAFIUnicast}
-	v6 := bgp.Family{AFI: bgp.AFIIPv6, SAFI: bgp.SAFIUnicast}
+	v4 := bgp.Family{
+		AFI:  bgp.AFIIPv4,
+		SAFI: bgp.SAFIUnicast,
+	}
+
+	v6 := bgp.Family{
+		AFI:  bgp.AFIIPv6,
+		SAFI: bgp.SAFIUnicast,
+	}
 
 	// One announcement per family. Sessions which negotiate multiprotocol
 	// support carry IPv4 in MP_REACH_NLRI too, leaving the UPDATE's classic
@@ -156,7 +167,11 @@ func Example_dualStack() {
 		attrs, err := bgp.MarshalAttributes(
 			bgp.OriginIGP,
 			bgp.ASPath{{ASNs: []uint32{64496}}},
-			bgp.MPReachNLRI{Family: r.family, NextHop: r.nextHop, NLRI: bgp.Prefixes{r.prefix}},
+			bgp.MPReachNLRI{
+				Family:  r.family,
+				NextHop: r.nextHop,
+				NLRI:    bgp.Prefixes{r.prefix},
+			},
 		)
 		if err != nil {
 			log.Fatalf("failed to marshal attributes: %v", err)
@@ -218,7 +233,10 @@ func Example_dualStack() {
 // reachability is announced with an IPv6 next hop. This is the shape of BGP
 // unnumbered fabrics.
 func Example_extendedNextHop() {
-	v4 := bgp.Family{AFI: bgp.AFIIPv4, SAFI: bgp.SAFIUnicast}
+	v4 := bgp.Family{
+		AFI:  bgp.AFIIPv4,
+		SAFI: bgp.SAFIUnicast,
+	}
 
 	attrs, err := bgp.MarshalAttributes(
 		bgp.OriginIGP,
@@ -303,9 +321,12 @@ func Example_hardened() {
 
 // Route refresh (RFC 2918) in both directions: advertising the capability
 // promises to re-send the table when the peer asks, and asking the peer
-// re-fetches its table when local policy changes — without a session reset.
+// re-fetches its table when local policy changes, without a session reset.
 func Example_routeRefresh() {
-	v4 := bgp.Family{AFI: bgp.AFIIPv4, SAFI: bgp.SAFIUnicast}
+	v4 := bgp.Family{
+		AFI:  bgp.AFIIPv4,
+		SAFI: bgp.SAFIUnicast,
+	}
 
 	attrs, err := bgp.MarshalAttributes(
 		bgp.OriginIGP,
@@ -366,16 +387,27 @@ func Example_routeRefresh() {
 	// A reload of local inbound policy re-fetches the peer's routes so the
 	// new policy applies to all of them. SendRouteRefresh is safe from any
 	// goroutine, and reports an error when the peer did not advertise the
-	// capability or no session is established.
-	go func() {
+	// capability or no session is established. The watcher stops with ctx,
+	// and returns before this function does.
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	wg.Go(func() {
 		reload := make(chan os.Signal, 1)
 		signal.Notify(reload, syscall.SIGHUP)
-		for range reload {
-			if err := p.SendRouteRefresh(ctx, v4); err != nil {
-				log.Printf("failed to request route refresh: %v", err)
+		defer signal.Stop(reload)
+
+		for {
+			select {
+			case <-reload:
+				if err := p.SendRouteRefresh(ctx, v4); err != nil {
+					log.Printf("failed to request route refresh: %v", err)
+				}
+			case <-ctx.Done():
+				return
 			}
 		}
-	}()
+	})
 
 	if err := p.Run(ctx); err != nil {
 		log.Fatalf("failed to run peer: %v", err)
@@ -484,9 +516,13 @@ func ExamplePeer_DeliverConn() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
+	// Closing the listener ends the accept loop, which returns before this
+	// function does.
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	defer l.Close()
 
-	go func() {
+	wg.Go(func() {
 		for {
 			c, err := l.Accept()
 			if err != nil {
@@ -499,7 +535,7 @@ func ExamplePeer_DeliverConn() {
 				_ = c.Close()
 			}
 		}
-	}()
+	})
 
 	if err := p.Run(ctx); err != nil {
 		log.Fatalf("failed to run peer: %v", err)
@@ -563,13 +599,24 @@ func ExampleServer() {
 		log.Fatalf("failed to create shutdown error: %v", err)
 	}
 
+	// The watcher stops with ctx, and returns before this function does.
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
 	ctx, cancel := context.WithCancelCause(context.Background())
-	go func() {
+	defer cancel(nil)
+
+	wg.Go(func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt)
-		<-sig
-		cancel(drain)
-	}()
+		defer signal.Stop(sig)
+
+		select {
+		case <-sig:
+			cancel(drain)
+		case <-ctx.Done():
+		}
+	})
 
 	// The Server accepts on listeners the caller binds, and closes them
 	// when Run returns. Bind immediately before Run: a handshake the kernel

@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// The concurrency shape of an FSM, per the FSM plan: one goroutine (Connect's)
-// owns every state transition, every timer, and every write. One reader
+// The concurrency shape of an FSM: one goroutine (Connect's) owns every
+// state transition, every timer, and every write. One reader
 // goroutine per live TCP connection (at most two, during collision handling)
 // blocks in Conn.ReadMessage and forwards messages to the FSM goroutine.
 // Once a session is established, the caller's handlers run directly on the
@@ -110,7 +110,7 @@ func (f *FSM) attempt(ctx context.Context) error {
 		state:      StateIdle,
 	}
 
-	if g := f.cfg.GracefulRestart; g != nil && g.Restarting != nil && g.Restarting() {
+	if f.cfg.GracefulRestart != nil && f.cfg.GracefulRestart.Restarting != nil && f.cfg.GracefulRestart.Restarting() {
 		a.open = f.opens[1]
 	}
 
@@ -348,8 +348,8 @@ func (a *attempt) setState(to State) {
 	from := a.state
 	a.state = to
 	a.f.log.Debug("state transition", "from", from, "to", to)
-	if h := a.f.cfg.OnStateChange; h != nil {
-		h(a.f, from, to)
+	if a.f.cfg.OnStateChange != nil {
+		a.f.cfg.OnStateChange(a.f, from, to)
 	}
 }
 
@@ -411,9 +411,16 @@ func (a *attempt) drop(fc *fsmConn, n *Notification, cl Close) error {
 // reject answers a connection's unexpected message with the RFC 6608
 // subcode for its state and tears the connection down.
 func (a *attempt) reject(fc *fsmConn) error {
-	n := &Notification{Code: NotificationFSMError, Subcode: fc.state.fsmSubcode()}
+	n := &Notification{
+		Code:    NotificationFSMError,
+		Subcode: fc.state.fsmSubcode(),
+	}
+
 	a.f.log.Info("unexpected message", "origin", fc.origin, "notification", n)
-	return a.drop(fc, n, Close{Notification: n, Local: true})
+	return a.drop(fc, n, Close{
+		Notification: n,
+		Local:        true,
+	})
 }
 
 // rejectOpen answers a peer's unacceptable OPEN with merr's NOTIFICATION and
@@ -421,7 +428,11 @@ func (a *attempt) reject(fc *fsmConn) error {
 func (a *attempt) rejectOpen(fc *fsmConn, merr *MessageError) error {
 	a.f.log.Info("OPEN rejected", "origin", fc.origin, "err", merr)
 	n := merr.Notification()
-	return a.drop(fc, n, Close{Notification: n, Err: merr, Local: true})
+	return a.drop(fc, n, Close{
+		Notification: n,
+		Err:          merr,
+		Local:        true,
+	})
 }
 
 // dial begins the active open, arming the connect retry timer as it does:
@@ -440,17 +451,18 @@ func (a *attempt) dial(ctx context.Context) {
 	a.dialC = ch
 	a.restartConnectRetryTimer()
 
-	// NewFSM requires a DialFunc unless Passive, and a Passive attempt
-	// never dials, so the seam is always populated here.
-	dial := a.f.cfg.DialFunc
-
 	go func() {
-		c, err := dial(ctx)
+		// NewFSM requires a DialFunc unless Passive, and a Passive attempt
+		// never dials, so the seam is always populated here.
+		c, err := a.f.cfg.DialFunc(ctx)
 		if err == nil {
 			a.f.adopt(c)
 		}
 
-		ch <- dialResult{c: c, err: err}
+		ch <- dialResult{
+			c:   c,
+			err: err,
+		}
 	}()
 }
 
@@ -465,7 +477,10 @@ func (a *attempt) tcpCRAcked(c *Conn) error {
 
 	if err := a.start(c, originDialed); err != nil {
 		if a.empty() {
-			return a.fail(Close{Err: err, Local: true})
+			return a.fail(Close{
+				Err:   err,
+				Local: true,
+			})
 		}
 
 		a.resumeConnectRetryTimer()
@@ -506,7 +521,10 @@ func (a *attempt) tcpConnectionConfirmed(c *Conn) error {
 	// and connect retry machinery is still running, so its attempt
 	// continues and nothing is reported until the attempt itself ends.
 	if err := a.start(c, originAccepted); err != nil && a.f.cfg.Passive {
-		return a.fail(Close{Err: err, Local: true})
+		return a.fail(Close{
+			Err:   err,
+			Local: true,
+		})
 	}
 
 	return nil
@@ -540,7 +558,10 @@ func (a *attempt) manualStop(ctx context.Context) error {
 
 		// fail kills the connections and reports the Close; its
 		// errAttemptOver verdict is superseded by ctx's error below.
-		_ = a.fail(Close{Notification: n, Local: true})
+		_ = a.fail(Close{
+			Notification: n,
+			Local:        true,
+		})
 	}
 
 	return ctx.Err()
@@ -554,7 +575,10 @@ func (a *attempt) manualStop(ctx context.Context) error {
 func (a *attempt) holdTimerExpires(fc *fsmConn) error {
 	n := &Notification{Code: NotificationHoldTimerExpired}
 	a.f.log.Info("hold timer expired", "origin", fc.origin, "state", fc.state)
-	return a.drop(fc, n, Close{Notification: n, Local: true})
+	return a.drop(fc, n, Close{
+		Notification: n,
+		Local:        true,
+	})
 }
 
 // keepaliveTimerExpires sends a periodic KEEPALIVE on a connection in
@@ -565,7 +589,10 @@ func (a *attempt) holdTimerExpires(fc *fsmConn) error {
 func (a *attempt) keepaliveTimerExpires(fc *fsmConn) error {
 	if err := writeBounded(fc.c, &Keepalive{}); err != nil {
 		a.f.log.Info("connection failed", "origin", fc.origin, "err", err)
-		return a.drop(fc, nil, Close{Err: err, Local: true})
+		return a.drop(fc, nil, Close{
+			Err:   err,
+			Local: true,
+		})
 	}
 
 	fc.keepaliveT.Reset(a.f.jittered(fc.sess.HoldTime / 3))
@@ -578,30 +605,33 @@ func (a *attempt) keepaliveTimerExpires(fc *fsmConn) error {
 // goroutine, and eventC is unbuffered with this goroutine its only receiver, so
 // a killed connection never has an event in flight once it is untracked.
 func (a *attempt) event(ctx context.Context, ev connEvent) error {
-	fc := ev.fc
-	if err := ev.err; err != nil {
+	if ev.err != nil {
 		// The connection died or delivered garbage: a *MessageError is
 		// terminal for a Conn, so answer and close either way. Before
 		// Established only the reader reports, so garbage is this speaker's
 		// close (it answers) and a dead transport is the peer's.
-		sent := notificationFromErr(err)
-		a.f.log.Info("connection failed", "origin", fc.origin, "err", err)
-		return a.drop(fc, sent, Close{Notification: sent, Err: err, Local: sent != nil})
+		sent := notificationFromErr(ev.err)
+		a.f.log.Info("connection failed", "origin", ev.fc.origin, "err", ev.err)
+		return a.drop(ev.fc, sent, Close{
+			Notification: sent,
+			Err:          ev.err,
+			Local:        sent != nil,
+		})
 	}
 
 	switch m := ev.msg.(type) {
 	case *Open:
-		return a.bgpOpen(fc, m)
+		return a.bgpOpen(ev.fc, m)
 	case *Keepalive:
-		return a.keepAliveMsg(ctx, fc)
+		return a.keepAliveMsg(ctx, ev.fc)
 	case *Notification:
 		// NotifMsg: the peer refused the OPEN exchange.
 		n := m.Clone()
-		a.f.log.Info("NOTIFICATION received", "origin", fc.origin, "notification", n)
-		return a.drop(fc, nil, Close{Notification: n})
+		a.f.log.Info("NOTIFICATION received", "origin", ev.fc.origin, "notification", n)
+		return a.drop(ev.fc, nil, Close{Notification: n})
 	default:
 		// UpdateMsg, or ROUTE-REFRESH, before the session is established.
-		return a.reject(fc)
+		return a.reject(ev.fc)
 	}
 }
 
@@ -621,17 +651,17 @@ func (a *attempt) bgpOpen(fc *fsmConn, o *Open) error {
 	// accepted in an attempt fixes the peer's claim, and a later OPEN which
 	// contradicts it is rejected: a peer must not steer which connection
 	// survives by advertising a different identity on each one.
-	if c := a.claimed; c == nil {
+	if a.claimed == nil {
 		a.claimed = sess.Peer
-	} else if sess.Peer.ASN != c.ASN || sess.Peer.ID != c.ID {
+	} else if sess.Peer.ASN != a.claimed.ASN || sess.Peer.ID != a.claimed.ID {
 		subcode, field := SubcodeBadBGPIdentifier, "identifier"
-		if sess.Peer.ASN != c.ASN {
+		if sess.Peer.ASN != a.claimed.ASN {
 			subcode, field = SubcodeBadPeerAS, "ASN"
 		}
 
 		return a.rejectOpen(fc, openError(subcode, nil,
 			"peer %s contradicts the identity accepted earlier in this attempt (%s, AS %d)",
-			field, c.ID, c.ASN))
+			field, a.claimed.ID, a.claimed.ASN))
 	}
 
 	fc.sess = sess
@@ -667,7 +697,7 @@ func (a *attempt) bgpOpen(fc *fsmConn, o *Open) error {
 	// keepAliveMsg.
 	if a.other(fc) != nil {
 		loser := a.tracked[originAccepted]
-		if !dialedSurvives(a.f.cfg.LocalID, a.claimed.ID, a.f.cfg.LocalASN, a.claimed.ASN) {
+		if !dialedSurvives(a.open, a.claimed) {
 			loser = a.tracked[originDialed]
 		}
 
@@ -685,7 +715,10 @@ func (a *attempt) bgpOpen(fc *fsmConn, o *Open) error {
 	// hold timer must be fed while it withholds the confirming KEEPALIVE.
 	if err := writeBounded(fc.c, &Keepalive{}); err != nil {
 		a.f.log.Info("connection failed", "origin", fc.origin, "err", err)
-		return a.drop(fc, nil, Close{Err: err, Local: true})
+		return a.drop(fc, nil, Close{
+			Err:   err,
+			Local: true,
+		})
 	}
 
 	fc.state = StateOpenConfirm
@@ -752,24 +785,26 @@ func (a *attempt) keepAliveMsg(ctx context.Context, fc *fsmConn) error {
 // events here. Like attempt, a session failure reports via onClose and
 // returns nil, concluding Connect.
 func (a *attempt) established(ctx context.Context, fc *fsmConn) error {
-	hold := fc.sess.HoldTime
 	a.f.log.Info("session established", "state", StateEstablished,
-		"origin", fc.origin, "hold_time", hold, "families", fc.sess.Families)
+		"origin", fc.origin, "hold_time", fc.sess.HoldTime, "families", fc.sess.Families)
 
 	// The connection's own timers carry over from OpenConfirm, restarted
 	// for the session (RFC 4271, section 8.2.2 restarts the hold timer on
 	// the KEEPALIVE which established): same timers, same cadence, but from
 	// here the keepalives go through the writer goroutine.
-	keepaliveT, holdT := fc.keepaliveT, fc.holdT
-	keepaliveT.Reset(a.f.jittered(hold / 3))
-	defer keepaliveT.Stop()
-	holdT.Reset(hold)
-	defer holdT.Stop()
+	fc.keepaliveT.Reset(a.f.jittered(fc.sess.HoldTime / 3))
+	defer fc.keepaliveT.Stop()
+	fc.holdT.Reset(fc.sess.HoldTime)
+	defer fc.holdT.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			a.f.endSession(fc, Close{Notification: a.f.shutdownCease(ctx), Local: true})
+			a.f.endSession(fc, Close{
+				Notification: a.f.shutdownCease(ctx),
+				Local:        true,
+			})
+
 			return ctx.Err()
 
 		case c := <-a.f.connC:
@@ -794,7 +829,7 @@ func (a *attempt) established(ctx context.Context, fc *fsmConn) error {
 				a.f.refuseConn(r.c, ceaseCollisionResolution)
 			}
 
-		case <-keepaliveT.C:
+		case <-fc.keepaliveT.C:
 			// The keepalive goes through the writer goroutine:
 			// a non-blocking send, dropping the tick when one is already
 			// pending, so the FSM never blocks on the write path. A write
@@ -810,12 +845,12 @@ func (a *attempt) established(ctx context.Context, fc *fsmConn) error {
 				a.f.log.Debug("dropped keepalive: writer is busy")
 			}
 
-			keepaliveT.Reset(a.f.jittered(hold / 3))
+			fc.keepaliveT.Reset(a.f.jittered(fc.sess.HoldTime / 3))
 
-		case <-holdT.C:
+		case <-fc.holdT.C:
 			elapsed := time.Duration(fc.sinceBase() - fc.lastRecv.Load())
-			if elapsed < hold {
-				holdT.Reset(hold - elapsed)
+			if elapsed < fc.sess.HoldTime {
+				fc.holdT.Reset(fc.sess.HoldTime - elapsed)
 				continue
 			}
 
@@ -824,10 +859,17 @@ func (a *attempt) established(ctx context.Context, fc *fsmConn) error {
 			// would lie in the peer operator's logs.
 			n := &Notification{Code: NotificationHoldTimerExpired}
 			if fc.inHandler.Load() {
-				n = &Notification{Code: NotificationCease, Subcode: SubcodeCeaseOutOfResources}
+				n = &Notification{
+					Code:    NotificationCease,
+					Subcode: SubcodeCeaseOutOfResources,
+				}
 			}
 
-			a.f.endSession(fc, Close{Notification: n, Local: true})
+			a.f.endSession(fc, Close{
+				Notification: n,
+				Local:        true,
+			})
+
 			return nil
 
 		case req := <-fc.resetC:
@@ -836,7 +878,11 @@ func (a *attempt) established(ctx context.Context, fc *fsmConn) error {
 			// what happens next; done releases the caller only after the
 			// teardown, OnClose included.
 			a.f.log.Info("session reset", "notification", req.n)
-			a.f.endSession(fc, Close{Notification: req.n, Local: true})
+			a.f.endSession(fc, Close{
+				Notification: req.n,
+				Local:        true,
+			})
+
 			close(req.done)
 			return nil
 
@@ -851,12 +897,11 @@ func (a *attempt) established(ctx context.Context, fc *fsmConn) error {
 			// is not observable. A peer's NOTIFICATION or a dead transport
 			// still decides its own close.
 			if ev.handlerErr != nil && ctx.Err() != nil {
-				cl := Close{
+				a.f.endSession(fc, Close{
 					Notification: a.f.shutdownCease(ctx),
 					Local:        true,
-				}
+				})
 
-				a.f.endSession(fc, cl)
 				return ctx.Err()
 			}
 
@@ -947,7 +992,11 @@ func sessionClose(ev connEvent) Close {
 			n = &Notification{Code: NotificationCease}
 		}
 
-		return Close{Notification: n, Err: ev.handlerErr, Local: true}
+		return Close{
+			Notification: n,
+			Err:          ev.handlerErr,
+			Local:        true,
+		}
 
 	case ev.err != nil:
 		// The connection died, or delivered garbage: a *MessageError is
@@ -960,7 +1009,11 @@ func sessionClose(ev connEvent) Close {
 			n = &Notification{Code: NotificationSendHoldTimerExpired}
 		}
 
-		return Close{Notification: n, Err: ev.err, Local: n != nil || ev.local}
+		return Close{
+			Notification: n,
+			Err:          ev.err,
+			Local:        n != nil || ev.local,
+		}
 
 	default:
 		switch m := ev.msg.(type) {
@@ -968,10 +1021,13 @@ func sessionClose(ev connEvent) Close {
 			return Close{Notification: m.Clone()}
 		default:
 			// A second OPEN mid-session.
-			return Close{Notification: &Notification{
-				Code:    NotificationFSMError,
-				Subcode: SubcodeUnexpectedMessageEstablished,
-			}, Local: true}
+			return Close{
+				Notification: &Notification{
+					Code:    NotificationFSMError,
+					Subcode: SubcodeUnexpectedMessageEstablished,
+				},
+				Local: true,
+			}
 		}
 	}
 }

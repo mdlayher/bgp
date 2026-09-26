@@ -84,10 +84,10 @@ type Server struct {
 }
 
 // A serverRun is the state of one Run: the context every goroutine of the
-// run descends from, the live listeners, and the join groups — acceptWG
-// for the accept loops, joined unconditionally, and unconfWG for
-// unconfigured-peer exchanges, joined with a bound because they invoke a
-// caller's hook. It holds WaitGroups, so it is never copied.
+// run descends from, the live listeners, and the join groups. acceptWG
+// joins the accept loops unconditionally. unconfWG joins the
+// unconfigured-peer exchanges with a bound, because they invoke a caller's
+// hook. It holds WaitGroups, so it is never copied.
 type serverRun struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -168,7 +168,11 @@ func (s *Server) AddPeer(addr netip.Addr, cfg PeerConfig) (*Peer, error) {
 		return nil, err
 	}
 
-	sp := &serverPeer{p: p, md5: cfg.MD5Password}
+	sp := &serverPeer{
+		p:   p,
+		md5: cfg.MD5Password,
+	}
+
 	s.peers[addr] = sp
 	if s.run != nil {
 		s.startPeerLocked(sp)
@@ -244,7 +248,10 @@ func (s *Server) Peers() iter.Seq2[netip.Addr, *Peer] {
 		s.mu.Lock()
 		snap := make([]entry, 0, len(s.peers))
 		for addr, sp := range s.peers {
-			snap = append(snap, entry{addr: addr, p: sp.p})
+			snap = append(snap, entry{
+				addr: addr,
+				p:    sp.p,
+			})
 		}
 
 		s.mu.Unlock()
@@ -309,6 +316,16 @@ func (s *Server) release() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runningC = make(chan struct{})
+}
+
+// running returns the channel which is closed while a Run is active, and
+// reports whether a run is published. A receive blocks until Run claims
+// the Server; once it has, a false live means the run failed before going
+// live. The channel is remade when Run returns.
+func (s *Server) running() (runningC <-chan struct{}, live bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runningC, s.run != nil
 }
 
 // setup starts a run from the caller's ctx and listeners: it claims the
@@ -428,6 +445,7 @@ func (s *Server) teardown(run *serverRun) {
 		run.unconfWG.Wait()
 		close(unconfDone)
 	}()
+
 	select {
 	case <-unconfDone:
 	case <-time.After(teardownTimeout):
@@ -570,7 +588,7 @@ func (s *Server) rejectUnconfigured(run *serverRun, c *Conn, raddr netip.AddrPor
 	case s.unconfSem <- struct{}{}:
 	default:
 		// Load shedding, not judgment about the peer, so the farewell is
-		// Cease / Out of Resources — the same subcode the FSM uses when
+		// Cease / Out of Resources: the same subcode the FSM uses when
 		// shedding. A 21 byte write into a fresh connection's empty send
 		// buffer cannot block, and writeBounded caps it regardless, so
 		// the accept loop is never stalled.
@@ -579,6 +597,7 @@ func (s *Server) rejectUnconfigured(run *serverRun, c *Conn, raddr netip.AddrPor
 			Code:    NotificationCease,
 			Subcode: SubcodeCeaseOutOfResources,
 		})
+
 		_ = c.Close()
 		return
 	}
@@ -594,9 +613,10 @@ func (s *Server) rejectUnconfigured(run *serverRun, c *Conn, raddr netip.AddrPor
 			_ = c.Close()
 			<-s.unconfSem
 		}()
+
 		_ = c.SetDeadline(time.Now().Add(unconfiguredPeerTimeout))
 
-		if f := s.cfg.OnUnconfiguredPeer; f != nil {
+		if s.cfg.OnUnconfiguredPeer != nil {
 			// One message under the deadline: the OPEN, if the remote is a
 			// live speaker. Anything else observes as nil.
 			var o *Open
@@ -604,7 +624,7 @@ func (s *Server) rejectUnconfigured(run *serverRun, c *Conn, raddr netip.AddrPor
 				o, _ = r.Message.(*Open)
 			}
 
-			f(run.ctx, raddr, o)
+			s.cfg.OnUnconfiguredPeer(run.ctx, raddr, o)
 		}
 
 		// The farewell real routers send (RFC 4486): it tells the remote

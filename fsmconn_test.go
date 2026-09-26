@@ -15,9 +15,11 @@ import (
 //
 // The ordering is checked deterministically under synctest: the reader is
 // held hostage inside Read after the close, so kill can only be either
-// blocked on its join or — the defect — already returned, and Wait settles
-// which before the hostage is released.
+// blocked on its join or, the defect, already returned. Wait settles which
+// before the hostage is released.
 func TestFSMConnKillJoinsReader(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		f := must(NewFSM(FSMConfig{
 			LocalASN: 64496,
@@ -38,8 +40,8 @@ func TestFSMConnKillJoinsReader(t *testing.T) {
 		}()
 
 		// Every goroutine is now durably blocked: the reader inside Read,
-		// past the close but before the release, and kill on its join —
-		// or, if kill does not join, nowhere, having returned.
+		// past the close but before the release, and kill on its join. A
+		// kill which does not join is nowhere, having returned.
 		synctest.Wait()
 		select {
 		case <-killed:

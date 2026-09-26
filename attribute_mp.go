@@ -45,7 +45,7 @@ func (m MPReachNLRI) appendData(b []byte) ([]byte, error) {
 	b = append(b, byte(m.Family.SAFI))
 
 	// A VPN family precedes each next hop address with a route
-	// distinguisher which must be zero (see Family.rdNextHop); an rd of 0
+	// distinguisher which must be zero; see Family.rdNextHop. An rd of 0
 	// prepends nothing.
 	var rd int
 	if m.Family.rdNextHop() {
@@ -60,23 +60,22 @@ func (m MPReachNLRI) appendData(b []byte) ([]byte, error) {
 	// value is an IPv6 address of sixteen. Unmapping here would re-encode
 	// a peer's sixteen byte next hop as four, which is a different next
 	// hop and, for an IPv6 family, not a legal one.
-	nh, ll := m.NextHop, m.LinkLocal
 	switch {
-	case !nh.IsValid() && !ll.IsValid():
+	case !m.NextHop.IsValid() && !m.LinkLocal.IsValid():
 		// An absent next hop: length zero, whatever the family.
 		b = append(b, 0)
-	case nh.Is4() && !ll.IsValid():
-		a := nh.As4()
+	case m.NextHop.Is4() && !m.LinkLocal.IsValid():
+		a := m.NextHop.As4()
 		b = append(b, byte(rd+4))
 		b = append(b, zero[:rd]...)
 		b = append(b, a[:]...)
-	case nh.Is6() && !ll.IsValid():
-		a := nh.As16()
+	case m.NextHop.Is6() && !m.LinkLocal.IsValid():
+		a := m.NextHop.As16()
 		b = append(b, byte(rd+16))
 		b = append(b, zero[:rd]...)
 		b = append(b, a[:]...)
-	case nh.Is6() && ll.Is6():
-		a, la := nh.As16(), ll.As16()
+	case m.NextHop.Is6() && m.LinkLocal.Is6():
+		a, la := m.NextHop.As16(), m.LinkLocal.As16()
 		b = append(b, byte(2*rd+32))
 		b = append(b, zero[:rd]...)
 		b = append(b, a[:]...)
@@ -101,9 +100,9 @@ func parseMPReachNLRI(b []byte, addPath bool) (MPReachNLRI, error) {
 
 	// The valid lengths depend on the family: a VPN family's addresses are
 	// each preceded by an 8 byte route distinguisher, mandated zero and
-	// stripped here (see Family.rdNextHop), so parse accepts exactly the
-	// lengths marshal produces and the fixed point holds. A length of zero
-	// is an absent next hop for any family (RFC 8955 sends one). A family
+	// stripped here, so parse accepts exactly the lengths marshal produces
+	// and the fixed point holds; see Family.rdNextHop. A length of zero is
+	// an absent next hop for any family, such as RFC 8955 sends. A family
 	// this package does not model passes validation with any length, and
 	// one this switch cannot decode is unsupported rather than malformed.
 	n := int(b[3])

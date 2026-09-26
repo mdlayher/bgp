@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/netip"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestRIBReader(t *testing.T) {
@@ -25,29 +27,39 @@ func TestRIBReader(t *testing.T) {
 	in = append(in, record(typeBGP4MP, 0, []byte{0xff})...)
 
 	want := []RIBEntry{
-		{Prefix: netip.MustParsePrefix("198.51.100.0/24"), Attrs: []byte{1}},
-		{Prefix: netip.MustParsePrefix("198.51.100.0/24"), Attrs: []byte{2, 2}},
-		{Prefix: netip.MustParsePrefix("2001:db8::/32"), Attrs: []byte{3, 3, 3}},
+		{
+			Prefix: netip.MustParsePrefix("198.51.100.0/24"),
+			Attrs:  []byte{1},
+		},
+		{
+			Prefix: netip.MustParsePrefix("198.51.100.0/24"),
+			Attrs:  []byte{2, 2},
+		},
+		{
+			Prefix: netip.MustParsePrefix("2001:db8::/32"),
+			Attrs:  []byte{3, 3, 3},
+		},
 	}
 
 	r := NewRIBReader(bytes.NewReader(in))
-	for i, w := range want {
+
+	var got []RIBEntry
+	for {
 		e, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+
 		if err != nil {
-			t.Fatalf("failed to read entry %d: %v", i, err)
+			t.Fatalf("failed to read entry %d: %v", len(got), err)
 		}
 
-		if e.Prefix != w.Prefix {
-			t.Fatalf("unexpected entry %d prefix: got %s, want %s", i, e.Prefix, w.Prefix)
-		}
-
-		if !bytes.Equal(e.Attrs, w.Attrs) {
-			t.Fatalf("unexpected entry %d attrs: got %x, want %x", i, e.Attrs, w.Attrs)
-		}
+		got = append(got, e)
 	}
 
-	if _, err := r.Next(); !errors.Is(err, io.EOF) {
-		t.Fatalf("expected io.EOF, but got: %v", err)
+	// netip.Prefix has only unexported fields, so cmp compares it with ==.
+	if d := cmp.Diff(want, got, cmp.Comparer(func(x, y netip.Prefix) bool { return x == y })); d != "" {
+		t.Fatalf("unexpected entries (-want +got):\n%s", d)
 	}
 }
 

@@ -81,7 +81,10 @@ type Family struct {
 }
 
 // familyEVPN is the L2VPN EVPN family of RFC 7432, whose NLRI is EVPNRoutes.
-var familyEVPN = Family{AFI: AFIL2VPN, SAFI: SAFIEVPN}
+var familyEVPN = Family{
+	AFI:  AFIL2VPN,
+	SAFI: SAFIEVPN,
+}
 
 // linkState reports whether f is one of the two BGP-LS families of RFC 9552,
 // whose NLRI is LinkStateRoutes and whose next hop is an IP address.
@@ -201,7 +204,7 @@ func prefixBits(afi AFI) (int, bool) {
 // top level of an UPDATE, or Optional Attribute Error within a multiprotocol
 // attribute.
 func parsePrefixes(b []byte, afi AFI, subcode uint8) ([]netip.Prefix, error) {
-	max, ok := prefixBits(afi)
+	_, ok := prefixBits(afi)
 	if !ok {
 		return nil, updateError(subcode, nil, "unsupported AFI %d", uint16(afi))
 	}
@@ -225,7 +228,7 @@ func parsePrefixes(b []byte, afi AFI, subcode uint8) ([]netip.Prefix, error) {
 	}
 
 	for len(b) > 0 {
-		p, rest, err := parsePrefix(b, max, afi, subcode)
+		p, rest, err := parsePrefix(b, afi, subcode)
 		if err != nil {
 			return nil, err
 		}
@@ -238,9 +241,10 @@ func parsePrefixes(b []byte, afi AFI, subcode uint8) ([]netip.Prefix, error) {
 }
 
 // parsePrefix parses one wire-encoded prefix from the front of b, returning
-// the prefix and the remaining bytes. b must be non-empty, and max is the
-// AFI's maximum prefix length from prefixBits.
-func parsePrefix(b []byte, max int, afi AFI, subcode uint8) (netip.Prefix, []byte, error) {
+// the prefix and the remaining bytes. b must be non-empty, and afi must be
+// prefix shaped.
+func parsePrefix(b []byte, afi AFI, subcode uint8) (netip.Prefix, []byte, error) {
+	max, _ := prefixBits(afi)
 	bits := int(b[0])
 	b = b[1:]
 	if bits > max {
@@ -290,7 +294,7 @@ func appendPathPrefixes(b []byte, ps PathPrefixes, afi AFI) ([]byte, error) {
 // the address family identified by afi, until b is exhausted, mirroring
 // parsePrefixes with each prefix preceded by its four byte path identifier.
 func parsePathPrefixes(b []byte, afi AFI, subcode uint8) (PathPrefixes, error) {
-	max, ok := prefixBits(afi)
+	_, ok := prefixBits(afi)
 	if !ok {
 		return nil, updateError(subcode, nil, "unsupported AFI %d", uint16(afi))
 	}
@@ -317,12 +321,16 @@ func parsePathPrefixes(b []byte, afi AFI, subcode uint8) (PathPrefixes, error) {
 		}
 
 		id := binary.BigEndian.Uint32(b[0:4])
-		p, rest, err := parsePrefix(b[4:], max, afi, subcode)
+		p, rest, err := parsePrefix(b[4:], afi, subcode)
 		if err != nil {
 			return nil, err
 		}
 
-		ps = append(ps, PathPrefix{ID: id, Prefix: p})
+		ps = append(ps, PathPrefix{
+			ID:     id,
+			Prefix: p,
+		})
+
 		b = rest
 	}
 

@@ -16,23 +16,23 @@ import (
 // bubble sees them as durably blocked and fake time advances across them.
 //
 // Read deadlines are honored; writes never block, so write deadlines never
-// bite. Kernel behaviors — socket buffers filling, resets — are what the
-// real-socket tests are for.
+// bite. Kernel behaviors, such as socket buffers filling or resets, are what
+// the real-socket tests are for.
 func memPipe() (a, b *memConn) {
 	ab, ba := newMemBuf(), newMemBuf()
-	return &memConn{in: ab, out: ba, done: make(chan struct{})},
-		&memConn{in: ba, out: ab, done: make(chan struct{})}
-}
+	a = &memConn{
+		in:   ab,
+		out:  ba,
+		done: make(chan struct{}),
+	}
 
-// A memConn is one end of a memPipe: it reads from in and writes to out.
-type memConn struct {
-	in, out *memBuf
+	b = &memConn{
+		in:   ba,
+		out:  ab,
+		done: make(chan struct{}),
+	}
 
-	// done closes on Close, unblocking this end's pending reads.
-	done     chan struct{}
-	once     sync.Once
-	mu       sync.Mutex
-	deadline time.Time
+	return a, b
 }
 
 // A memBuf is one origin of a memPipe: bytes appended by the writer and
@@ -47,27 +47,78 @@ type memBuf struct {
 
 func newMemBuf() *memBuf { return &memBuf{ready: make(chan struct{})} }
 
-func (b *memBuf) signal() {
+// read copies buffered bytes into p. When none are buffered and the writer
+// has not closed, it returns the channel which closes on the next change.
+func (b *memBuf) read(p []byte) (int, <-chan struct{}, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if n := copy(p, b.buf); n > 0 {
+		b.buf = b.buf[n:]
+		return n, nil, nil
+	}
+
+	if b.closed {
+		return 0, nil, io.EOF
+	}
+
+	return 0, b.ready, nil
+}
+
+// write appends p for the reader.
+func (b *memBuf) write(p []byte) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.closed {
+		return io.ErrClosedPipe
+	}
+
+	b.buf = append(b.buf, p...)
+	b.signalLocked()
+	return nil
+}
+
+// close marks the buffer closed and wakes a waiting reader.
+func (b *memBuf) close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.closed = true
+	b.signalLocked()
+}
+
+// nudge wakes a waiting reader without a change to the buffer.
+func (b *memBuf) nudge() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.signalLocked()
+}
+
+// signalLocked broadcasts a change to a waiting reader. b.mu must be held.
+func (b *memBuf) signalLocked() {
 	close(b.ready)
 	b.ready = make(chan struct{})
 }
 
+// A memConn is one end of a memPipe: it reads from in and writes to out.
+type memConn struct {
+	in, out *memBuf
+
+	// done closes on Close, unblocking this end's pending reads.
+	done     chan struct{}
+	once     sync.Once
+	mu       sync.Mutex
+	deadline time.Time
+}
+
 func (c *memConn) Read(p []byte) (int, error) {
 	for {
-		c.in.mu.Lock()
-		if n := copy(p, c.in.buf); n > 0 {
-			c.in.buf = c.in.buf[n:]
-			c.in.mu.Unlock()
-			return n, nil
+		n, ready, err := c.in.read(p)
+		if n > 0 || err != nil {
+			return n, err
 		}
-
-		if c.in.closed {
-			c.in.mu.Unlock()
-			return 0, io.EOF
-		}
-
-		ready := c.in.ready
-		c.in.mu.Unlock()
 
 		// The deadline is re-read on every wakeup, so SetReadDeadline's
 		// nudge applies it to a read already in progress.
@@ -84,7 +135,6 @@ func (c *memConn) Read(p []byte) (int, error) {
 
 		c.mu.Unlock()
 
-		var err error
 		select {
 		case <-ready:
 		case <-timeout:
@@ -110,14 +160,10 @@ func (c *memConn) Write(p []byte) (int, error) {
 	default:
 	}
 
-	c.out.mu.Lock()
-	defer c.out.mu.Unlock()
-	if c.out.closed {
-		return 0, io.ErrClosedPipe
+	if err := c.out.write(p); err != nil {
+		return 0, err
 	}
 
-	c.out.buf = append(c.out.buf, p...)
-	c.out.signal()
 	return len(p), nil
 }
 
@@ -126,12 +172,8 @@ func (c *memConn) Write(p []byte) (int, error) {
 func (c *memConn) Close() error {
 	c.once.Do(func() {
 		close(c.done)
-		for _, b := range []*memBuf{c.out, c.in} {
-			b.mu.Lock()
-			b.closed = true
-			b.signal()
-			b.mu.Unlock()
-		}
+		c.out.close()
+		c.in.close()
 	})
 	return nil
 }
@@ -143,9 +185,7 @@ func (c *memConn) SetReadDeadline(t time.Time) error {
 	c.deadline = t
 	c.mu.Unlock()
 	// A pending read re-evaluates its deadline on the next wakeup: nudge it.
-	c.in.mu.Lock()
-	c.in.signal()
-	c.in.mu.Unlock()
+	c.in.nudge()
 	return nil
 }
 

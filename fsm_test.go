@@ -90,11 +90,8 @@ func TestFSMConnectNotIdle(t *testing.T) {
 	go func() { connectC <- f.Connect(ctx) }()
 
 	// Once the first Connect has left Idle, a second must refuse.
-	f.mu.Lock()
-	runningC := f.runningC
-	f.mu.Unlock()
 	select {
-	case <-runningC:
+	case <-f.running():
 	case <-time.After(peerTimeout):
 		t.Fatal("timed out waiting for Connect to leave Idle")
 	}
@@ -132,6 +129,7 @@ func TestFSMDeliverConnIdle(t *testing.T) {
 		_ = client.Close()
 		_ = server.Close()
 	}()
+
 	if err := f.DeliverConn(NewConn(client)); !errors.Is(err, errFSMIdle) {
 		t.Fatalf("expected errFSMIdle from an idle FSM, got: %v", err)
 	}
@@ -275,11 +273,8 @@ func TestFSMDeliverConnUnaddressed(t *testing.T) {
 	connectC := make(chan error, 1)
 	go func() { connectC <- f.Connect(ctx) }()
 
-	f.mu.Lock()
-	runningC := f.runningC
-	f.mu.Unlock()
 	select {
-	case <-runningC:
+	case <-f.running():
 	case <-time.After(peerTimeout):
 		t.Fatal("timed out waiting for Connect to leave Idle")
 	}

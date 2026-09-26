@@ -36,8 +36,14 @@ func TestConnRoundTrip(t *testing.T) {
 				ID:          MustParseIdentifier("192.0.2.1"),
 				FourOctetAS: true,
 				Capabilities: []Capability{
-					MultiprotocolCapability(Family{AFI: AFIIPv4, SAFI: SAFIUnicast}),
-					MultiprotocolCapability(Family{AFI: AFIIPv6, SAFI: SAFIUnicast}),
+					MultiprotocolCapability(Family{
+						AFI:  AFIIPv4,
+						SAFI: SAFIUnicast,
+					}),
+					MultiprotocolCapability(Family{
+						AFI:  AFIIPv6,
+						SAFI: SAFIUnicast,
+					}),
 					{Code: CapabilityRouteRefresh},
 				},
 			},
@@ -70,14 +76,20 @@ func TestConnRoundTrip(t *testing.T) {
 					OriginIGP,
 					ASPath{{ASNs: []uint32{64496}}},
 					MPReachNLRI{
-						Family:  Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+						Family: Family{
+							AFI:  AFIIPv6,
+							SAFI: SAFIUnicast,
+						},
 						NextHop: netip.MustParseAddr("2001:db8::1"),
 						NLRI: Prefixes{
 							netip.MustParsePrefix("2001:db8:1::/48"),
 						},
 					},
 					MPUnreachNLRI{
-						Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+						Family: Family{
+							AFI:  AFIIPv6,
+							SAFI: SAFIUnicast,
+						},
 						NLRI: Prefixes{
 							netip.MustParsePrefix("2001:db8:2::/48"),
 						},
@@ -107,7 +119,10 @@ func TestConnRoundTrip(t *testing.T) {
 		{
 			name: "route refresh",
 			m: &RouteRefresh{
-				Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				},
 			},
 		},
 	}
@@ -176,17 +191,23 @@ func TestConnReadMessageBurst(t *testing.T) {
 
 	client, server := testConns(t, "tcp")
 
-	errC := make(chan error, 1)
-	go func() {
+	// Closing the client unblocks a writer the reader stopped short of, so
+	// the join cannot hang when a read fails.
+	var eg errgroup.Group
+	t.Cleanup(func() {
+		_ = client.Close()
+		_ = eg.Wait()
+	})
+
+	eg.Go(func() error {
 		for _, m := range want {
 			if err := client.WriteMessage(m); err != nil {
-				errC <- err
-				return
+				return err
 			}
 		}
 
-		errC <- nil
-	}()
+		return nil
+	})
 
 	got := make([]Message, 0, len(want))
 	for range want {
@@ -200,7 +221,7 @@ func TestConnReadMessageBurst(t *testing.T) {
 		got = append(got, detachMessage(t, r.Message))
 	}
 
-	if err := <-errC; err != nil {
+	if err := eg.Wait(); err != nil {
 		t.Fatalf("failed to write messages: %v", err)
 	}
 
@@ -297,9 +318,13 @@ func TestConnReadMessageErrors(t *testing.T) {
 
 			// The error must describe a Notification the caller can send
 			// verbatim, and must remain intact after the read buffer moves on.
-			n := merr.Notification()
-			want := &Notification{Code: tt.code, Subcode: tt.subcode, Data: tt.data}
-			if d := diff(t, want, n); d != "" {
+			want := &Notification{
+				Code:    tt.code,
+				Subcode: tt.subcode,
+				Data:    tt.data,
+			}
+
+			if d := diff(t, want, merr.Notification()); d != "" {
 				t.Fatalf("unexpected Notification (-want +got):\n%s", d)
 			}
 		})
@@ -411,9 +436,14 @@ func TestConnReadMessageDribble(t *testing.T) {
 	// no matter how the writer paces them.
 	peer, nc := net.Pipe()
 	server := NewConn(nc)
+
+	// Closing both ends unblocks a writer the reader stopped short of, so the
+	// join cannot hang when a read fails.
+	var eg errgroup.Group
 	t.Cleanup(func() {
 		_ = peer.Close()
 		_ = server.Close()
+		_ = eg.Wait()
 	})
 
 	// Bound both sides so a reassembly bug fails fast instead of wedging.
@@ -426,27 +456,24 @@ func TestConnReadMessageDribble(t *testing.T) {
 		t.Fatalf("failed to set read deadline: %v", err)
 	}
 
-	errC := make(chan error, 1)
-	go func() {
+	eg.Go(func() error {
 		// Dribble the message onto the wire so that it can never arrive in a
 		// single read.
 		for i := 0; i < len(b); i += 3 {
-			end := min(i+3, len(b))
-			if _, err := peer.Write(b[i:end]); err != nil {
-				errC <- err
-				return
+			if _, err := peer.Write(b[i:min(i+3, len(b))]); err != nil {
+				return err
 			}
 		}
 
-		errC <- nil
-	}()
+		return nil
+	})
 
 	r, err := server.ReadMessage()
 	if err != nil {
 		t.Fatalf("failed to read message: %v", err)
 	}
 
-	if err := <-errC; err != nil {
+	if err := eg.Wait(); err != nil {
 		t.Fatalf("failed to write message: %v", err)
 	}
 
@@ -555,7 +582,10 @@ func TestConnWriteMessageBufferReuse(t *testing.T) {
 		Data: bytes.Repeat([]byte{0xaa}, 1024),
 	}
 
-	small := &Notification{Code: NotificationCease, Subcode: 1}
+	small := &Notification{
+		Code:    NotificationCease,
+		Subcode: 1,
+	}
 
 	for _, want := range []Message{big, small, big} {
 		if err := client.WriteMessage(want); err != nil {
@@ -707,13 +737,11 @@ func TestTCPOptionsCheck(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			d := &Dialer{TCPOptions: tt.o}
-			if _, err := d.Dial(context.Background(), raddr.Addr()); err == nil {
+			if _, err := (&Dialer{TCPOptions: tt.o}).Dial(context.Background(), raddr.Addr()); err == nil {
 				t.Fatal("expected an error from Dial, but none occurred")
 			}
 
-			lc := &ListenConfig{TCPOptions: tt.o}
-			if _, err := lc.Listen(context.Background(), raddr); err == nil {
+			if _, err := (&ListenConfig{TCPOptions: tt.o}).Listen(context.Background(), raddr); err == nil {
 				t.Fatal("expected an error from Listen, but none occurred")
 			}
 		})
@@ -742,17 +770,6 @@ func TestListenerExplicitBind(t *testing.T) {
 
 	defer func() { _ = l.Close() }()
 
-	type accepted struct {
-		c   *Conn
-		err error
-	}
-
-	acceptC := make(chan accepted, 1)
-	go func() {
-		c, err := l.Accept()
-		acceptC <- accepted{c: c, err: err}
-	}()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -765,18 +782,20 @@ func TestListenerExplicitBind(t *testing.T) {
 
 	defer func() { _ = client.Close() }()
 
-	a := <-acceptC
-	if a.err != nil {
-		t.Fatalf("failed to accept: %v", a.err)
+	// The kernel completes the handshake into the listen backlog, so the
+	// dial returns before Accept is called.
+	server, err := l.Accept()
+	if err != nil {
+		t.Fatalf("failed to accept: %v", err)
 	}
 
-	defer func() { _ = a.c.Close() }()
+	defer func() { _ = server.Close() }()
 
 	if err := client.WriteMessage(&Keepalive{}); err != nil {
 		t.Fatalf("failed to write KEEPALIVE: %v", err)
 	}
 
-	if _, err := a.c.ReadMessage(); err != nil {
+	if _, err := server.ReadMessage(); err != nil {
 		t.Fatalf("failed to read KEEPALIVE: %v", err)
 	}
 }
@@ -808,51 +827,6 @@ func TestListenerMD5Arguments(t *testing.T) {
 	}
 }
 
-// dialAddrPort dials ap with d: the Dialer's Port is ap's, so a test reaches
-// an ephemeral listener port while Dial itself takes only an address.
-func dialAddrPort(ctx context.Context, d *Dialer, ap netip.AddrPort) (*Conn, error) {
-	dd := *d
-	dd.Port = ap.Port()
-	return dd.Dial(ctx, ap.Addr())
-}
-
-// replayConn is a net.Conn which serves an in-memory byte stream on repeat,
-// so a benchmark measures Conn framing rather than kernel behavior.
-type replayConn struct {
-	b   []byte
-	off int
-}
-
-func (c *replayConn) Read(p []byte) (int, error) {
-	if c.off == len(c.b) {
-		c.off = 0
-	}
-
-	n := copy(p, c.b[c.off:])
-	c.off += n
-	return n, nil
-}
-
-func (c *replayConn) Write(p []byte) (int, error)      { return len(p), nil }
-func (c *replayConn) Close() error                     { return nil }
-func (c *replayConn) LocalAddr() net.Addr              { return nil }
-func (c *replayConn) RemoteAddr() net.Addr             { return nil }
-func (c *replayConn) SetDeadline(time.Time) error      { return nil }
-func (c *replayConn) SetReadDeadline(time.Time) error  { return nil }
-func (c *replayConn) SetWriteDeadline(time.Time) error { return nil }
-
-// listenerAddrPort returns the address a Listener is bound to.
-func listenerAddrPort(tb testing.TB, l *Listener) netip.AddrPort {
-	tb.Helper()
-
-	a, ok := l.Addr().(*net.TCPAddr)
-	if !ok {
-		tb.Fatalf("unexpected listener address type: %T", l.Addr())
-	}
-
-	return a.AddrPort()
-}
-
 // localNetworks returns the TCP network variants this host supports: IPv4
 // loopback always, plus IPv6 when available, so tests exercise both address
 // families.
@@ -867,70 +841,4 @@ func localNetworks(tb testing.TB) []string {
 	}
 
 	return networks
-}
-
-// testConns creates a pair of Conns joined by a real loopback TCP connection
-// on the given network, and registers cleanup for both. Real TCP is used
-// rather than net.Pipe so that kernel buffering, partial reads, and deadlines
-// behave as they do in production.
-func testConns(tb testing.TB, network string) (client, server *Conn) {
-	tb.Helper()
-
-	l, err := nettest.NewLocalListener(network)
-	if err != nil {
-		tb.Fatalf("failed to create listener: %v", err)
-	}
-
-	defer func() { _ = l.Close() }()
-
-	type accepted struct {
-		c   net.Conn
-		err error
-	}
-
-	acceptC := make(chan accepted, 1)
-	go func() {
-		c, err := l.Accept()
-		acceptC <- accepted{c: c, err: err}
-	}()
-
-	cc, err := net.Dial(network, l.Addr().String())
-	if err != nil {
-		tb.Fatalf("failed to dial: %v", err)
-	}
-
-	a := <-acceptC
-	if a.err != nil {
-		_ = cc.Close()
-		tb.Fatalf("failed to accept: %v", a.err)
-	}
-
-	client, server = NewConn(cc), NewConn(a.c)
-	tb.Cleanup(func() {
-		_ = client.Close()
-		_ = server.Close()
-	})
-	return client, server
-}
-
-// rawConn exposes a Conn's underlying connection, so that tests may place
-// arbitrary bytes on the wire.
-func (c *Conn) rawConn() net.Conn { return c.c }
-
-// detachMessage copies every byte slice reachable from m, producing a Message
-// which outlives the next Conn.ReadMessage call.
-func detachMessage(tb testing.TB, m Message) Message {
-	tb.Helper()
-
-	b, err := m.AppendBinary(nil)
-	if err != nil {
-		tb.Fatalf("failed to marshal message: %v", err)
-	}
-
-	r, err := ParseMessage(b)
-	if err != nil {
-		tb.Fatalf("failed to parse message: %v", err)
-	}
-
-	return r.Message
 }

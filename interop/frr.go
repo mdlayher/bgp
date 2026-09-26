@@ -15,16 +15,16 @@ import (
 
 // frrVersion pins the FRR oracle release, enforced against the
 // daemons' own reported version at startup. A silent oracle change
-// must never be observable as a test result — it would be
-// indistinguishable from a regression in this library — so upgrades
-// are deliberate bumps of this constant together with the nix flake
+// must never be observable as a test result, since it would be
+// indistinguishable from a regression in this library. Upgrades are
+// therefore deliberate bumps of this constant together with the nix flake
 // lock that supplies FRR to dev shells and CI, with the quirk-pinning
 // scenario as the tripwire.
 const frrVersion = "10.7.0"
 
 // frrHostname pins the instance's kernel hostname via its UTS
 // namespace. FRR's FQDN capability carries the kernel hostname rather
-// than frr.conf's hostname (observed with 10.7.0), so the hostname
+// than frr.conf's hostname, as observed with 10.7.0, so the hostname
 // assertion in the establish scenario depends on this pin, not on the
 // config template.
 const frrHostname = "frr-interop"
@@ -37,8 +37,7 @@ type frrConfig struct {
 
 	// NetworksV4 and NetworksV6 are prefixes FRR originates via
 	// network statements in the respective unicast address family.
-	NetworksV4 []netip.Prefix
-	NetworksV6 []netip.Prefix
+	NetworksV4, NetworksV6 []netip.Prefix
 
 	// GracefulRestart enables `bgp graceful-restart`: FRR advertises
 	// the capability and sends End-of-RIB markers after its initial
@@ -87,7 +86,7 @@ type frrNeighbor struct {
 	// its own identifier. The template applies it to both families
 	// deliberately: FRR computes one Send flag per OPEN and advertises
 	// it for every activated family once any family has a TX mode
-	// configured (observed with 10.7.0), so a single family
+	// configured, as observed with 10.7.0, so a single family
 	// configuration would negotiate Send for both anyway. FRR
 	// advertises add-path Receive for every activated family by
 	// default, whatever this field says.
@@ -98,8 +97,7 @@ type frrNeighbor struct {
 type frr struct {
 	// Addr and Addr6 are the instance's addresses: the dial targets
 	// of an active library speaker.
-	Addr  netip.Addr
-	Addr6 netip.Addr
+	Addr, Addr6 netip.Addr
 
 	name string
 	vt   *nsFRR
@@ -189,10 +187,10 @@ type frrNeighborJSON struct {
 		AddPath         map[string]frrAddPathCapJSON `json:"addPath"`
 	} `json:"neighborCapabilities"`
 
-	// The last NOTIFICATION on the session, as FRR recorded it:
-	// code/subcode as four hex digits (e.g. "0602" for Cease /
-	// Administrative Shutdown), the RFC 8538 Hard Reset marker, and
-	// the received RFC 9003 shutdown communication, if any.
+	// The last NOTIFICATION on the session, as FRR recorded it: the
+	// code and subcode as four hex digits, the RFC 8538 Hard Reset
+	// marker, and the received RFC 9003 shutdown communication, if
+	// any. "0602" is Cease / Administrative Shutdown.
 	LastErrorCodeSubcode      string `json:"lastErrorCodeSubcode"`
 	LastNotificationReason    string `json:"lastNotificationReason"`
 	LastNotificationHardReset bool   `json:"lastNotificationHardReset"`
@@ -242,10 +240,26 @@ func (f *frr) awaitEstablished(t *testing.T, addr netip.Addr) frrNeighborJSON {
 	return n
 }
 
+// awaitNotified polls until FRR records a last NOTIFICATION with the
+// given four-hex-digit code/subcode for the neighbor at addr, and
+// returns that view. "0602" is Cease / Administrative Shutdown.
+func (f *frr) awaitNotified(t *testing.T, addr netip.Addr, codeSubcode string) frrNeighborJSON {
+	t.Helper()
+
+	var n frrNeighborJSON
+	f.poll(t, "neighbor "+addr.String()+" never recorded notification "+codeSubcode, func() bool {
+		var err error
+		n, err = f.neighbor(t, addr)
+		return err == nil && n.LastErrorCodeSubcode == codeSubcode
+	})
+
+	return n
+}
+
 // configure applies configuration lines through vtysh, entering
-// configure terminal first; vtysh retains mode across -c arguments,
-// so nested lines (router bgp, then neighbor statements) work as they
-// would interactively.
+// configure terminal first. vtysh retains mode across -c arguments,
+// so nested lines work as they would interactively: router bgp, then
+// neighbor statements.
 func (f *frr) configure(t *testing.T, lines ...string) {
 	t.Helper()
 
@@ -309,15 +323,20 @@ type frrPrefixPathJSON struct {
 	Nexthops []frrNexthopJSON `json:"nexthops"`
 }
 
-// awaitPrefixPaths polls until FRR's BGP table for family ("ipv4" or
-// "ipv6") holds exactly n paths for prefix, and returns them. FRR
+// awaitPrefixPaths polls until FRR's unicast BGP table for prefix's
+// family holds exactly n paths for prefix, and returns them. FRR
 // answers the detail command for an absent prefix with an error rather
 // than JSON, which counts as zero paths.
-func (f *frr) awaitPrefixPaths(t *testing.T, family string, prefix netip.Prefix, n int) []frrPrefixPathJSON {
+func (f *frr) awaitPrefixPaths(t *testing.T, prefix netip.Prefix, n int) []frrPrefixPathJSON {
 	t.Helper()
 
 	var out struct {
 		Paths []frrPrefixPathJSON `json:"paths"`
+	}
+
+	family := "ipv6"
+	if prefix.Addr().Is4() {
+		family = "ipv4"
 	}
 
 	cmd := fmt.Sprintf("show bgp %s unicast %s json", family, prefix)

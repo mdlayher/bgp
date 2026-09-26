@@ -1,7 +1,6 @@
 package bgp
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 )
@@ -51,7 +50,11 @@ func TestNotificationParseEmptyData(t *testing.T) {
 		t.Fatalf("failed to parse NOTIFICATION: %v", err)
 	}
 
-	want := &Notification{Code: NotificationCease, Subcode: 2}
+	want := &Notification{
+		Code:    NotificationCease,
+		Subcode: 2,
+	}
+
 	if d := diff[Message](t, want, r.Message); d != "" {
 		t.Fatalf("unexpected NOTIFICATION (-want +got):\n%s", d)
 	}
@@ -60,20 +63,18 @@ func TestNotificationParseEmptyData(t *testing.T) {
 func TestNotificationAppendBinaryWire(t *testing.T) {
 	t.Parallel()
 
-	n := &Notification{
+	b, err := (&Notification{
 		Code:    NotificationUpdateMessageError,
 		Subcode: SubcodeMalformedASPath,
 		Data:    []byte{0x01, 0x02},
-	}
-
-	b, err := n.AppendBinary(nil)
+	}).AppendBinary(nil)
 	if err != nil {
 		t.Fatalf("failed to marshal NOTIFICATION: %v", err)
 	}
 
 	want := testMessage(MessageTypeNotification, []byte{0x03, 0x0b, 0x01, 0x02})
-	if !bytes.Equal(want, b) {
-		t.Fatalf("unexpected NOTIFICATION bytes:\nwant: %x\n got: %x", want, b)
+	if d := diff(t, want, b); d != "" {
+		t.Fatalf("unexpected NOTIFICATION bytes (-want +got):\n%s", d)
 	}
 }
 
@@ -82,7 +83,11 @@ func TestNotificationShutdownCommunication(t *testing.T) {
 
 	// cease produces a Cease NOTIFICATION with the given subcode and data.
 	cease := func(subcode uint8, data []byte) *Notification {
-		return &Notification{Code: NotificationCease, Subcode: subcode, Data: data}
+		return &Notification{
+			Code:    NotificationCease,
+			Subcode: subcode,
+			Data:    data,
+		}
 	}
 
 	tests := []struct {
@@ -209,8 +214,8 @@ func TestMarshalShutdownCommunication(t *testing.T) {
 				t.Fatalf("failed to marshal: %v", err)
 			}
 
-			if !bytes.Equal(tt.want, got) {
-				t.Fatalf("unexpected data:\nwant: %x\n got: %x", tt.want, got)
+			if d := diff(t, tt.want, got); d != "" {
+				t.Fatalf("unexpected data (-want +got):\n%s", d)
 			}
 
 			// Every encoding round-trips through the decode helper.

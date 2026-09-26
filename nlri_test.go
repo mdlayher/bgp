@@ -22,12 +22,18 @@ func TestParseNLRIShape(t *testing.T) {
 	}{
 		{
 			name: "IPv4 unicast",
-			f:    Family{AFI: AFIIPv4, SAFI: SAFIUnicast},
+			f: Family{
+				AFI:  AFIIPv4,
+				SAFI: SAFIUnicast,
+			},
 			want: Prefixes{netip.MustParsePrefix("192.0.2.0/24")},
 		},
 		{
 			name: "IPv4 multicast",
-			f:    Family{AFI: AFIIPv4, SAFI: SAFIMulticast},
+			f: Family{
+				AFI:  AFIIPv4,
+				SAFI: SAFIMulticast,
+			},
 			want: Prefixes{netip.MustParsePrefix("192.0.2.0/24")},
 		},
 		{
@@ -35,7 +41,10 @@ func TestParseNLRIShape(t *testing.T) {
 			// prefix length, so decoding it as a prefix would silently
 			// produce a wrong answer rather than no answer.
 			name: "IPv4 unmodeled SAFI",
-			f:    Family{AFI: AFIIPv4, SAFI: 4},
+			f: Family{
+				AFI:  AFIIPv4,
+				SAFI: 4,
+			},
 			want: RawNLRI(pfx),
 		},
 		{
@@ -43,25 +52,43 @@ func TestParseNLRIShape(t *testing.T) {
 			// prefix's leading address byte does, so no short buffer is
 			// valid as both a prefix list and a record list.
 			name: "L2VPN EVPN",
-			f:    Family{AFI: AFIL2VPN, SAFI: SAFIEVPN},
-			b:    []byte{4, 2, 192, 0},
-			want: EVPNRoutes{{Type: EVPNRouteEthernetSegment, Value: []byte{192, 0}}},
+			f: Family{
+				AFI:  AFIL2VPN,
+				SAFI: SAFIEVPN,
+			},
+			b: []byte{4, 2, 192, 0},
+			want: EVPNRoutes{{
+				Type:  EVPNRouteEthernetSegment,
+				Value: []byte{192, 0},
+			}},
 		},
 		{
 			name: "L2VPN VPLS",
-			f:    Family{AFI: AFIL2VPN, SAFI: SAFIVPLS},
+			f: Family{
+				AFI:  AFIL2VPN,
+				SAFI: SAFIVPLS,
+			},
 			want: RawNLRI(pfx),
 		},
 		{
 			// BGP-LS frames a record with a two byte type and length.
 			name: "BGP-LS",
-			f:    Family{AFI: AFILinkState, SAFI: SAFILinkState},
-			b:    []byte{0, 1, 0, 2, 192, 0},
-			want: LinkStateRoutes{{Type: LinkStateRouteNode, Value: []byte{192, 0}}},
+			f: Family{
+				AFI:  AFILinkState,
+				SAFI: SAFILinkState,
+			},
+			b: []byte{0, 1, 0, 2, 192, 0},
+			want: LinkStateRoutes{{
+				Type:  LinkStateRouteNode,
+				Value: []byte{192, 0},
+			}},
 		},
 		{
 			name: "unmodeled AFI",
-			f:    Family{AFI: 3, SAFI: SAFIUnicast},
+			f: Family{
+				AFI:  3,
+				SAFI: SAFIUnicast,
+			},
 			want: RawNLRI(pfx),
 		},
 	}
@@ -93,12 +120,30 @@ func TestParseNLRIEmptyIsNil(t *testing.T) {
 	// Nothing is spelled nil for every family, modeled or not, so a caller
 	// may recognize an End-of-RIB marker without knowing the family's shape.
 	for _, f := range []Family{
-		{AFI: AFIIPv4, SAFI: SAFIUnicast},
-		{AFI: AFIIPv6, SAFI: SAFIUnicast},
-		{AFI: AFIL2VPN, SAFI: SAFIEVPN},
-		{AFI: AFIL2VPN, SAFI: SAFIVPLS},
-		{AFI: AFILinkState, SAFI: SAFILinkState},
-		{AFI: 3, SAFI: SAFIUnicast},
+		{
+			AFI:  AFIIPv4,
+			SAFI: SAFIUnicast,
+		},
+		{
+			AFI:  AFIIPv6,
+			SAFI: SAFIUnicast,
+		},
+		{
+			AFI:  AFIL2VPN,
+			SAFI: SAFIEVPN,
+		},
+		{
+			AFI:  AFIL2VPN,
+			SAFI: SAFIVPLS,
+		},
+		{
+			AFI:  AFILinkState,
+			SAFI: SAFILinkState,
+		},
+		{
+			AFI:  3,
+			SAFI: SAFIUnicast,
+		},
 	} {
 		t.Run(f.String(), func(t *testing.T) {
 			t.Parallel()
@@ -121,18 +166,19 @@ func TestParseEVPNRoutes(t *testing.T) {
 	// Two records back to back, the second empty: the framing is a type, a
 	// length, and a value of exactly that length, and this package validates
 	// nothing beyond it.
-	b := []byte{
+	got, err := parseEVPNRoutes([]byte{
 		2, 4, 0xde, 0xad, 0xbe, 0xef,
 		5, 0,
-	}
-
-	got, err := parseEVPNRoutes(b)
+	})
 	if err != nil {
 		t.Fatalf("failed to parse EVPN routes: %v", err)
 	}
 
 	want := EVPNRoutes{
-		{Type: EVPNRouteMACIPAdvertisement, Value: []byte{0xde, 0xad, 0xbe, 0xef}},
+		{
+			Type:  EVPNRouteMACIPAdvertisement,
+			Value: []byte{0xde, 0xad, 0xbe, 0xef},
+		},
 		{Type: EVPNRouteIPPrefix},
 	}
 
@@ -170,7 +216,10 @@ func TestParseEVPNRoutesErrors(t *testing.T) {
 			// multiprotocol attribute, so it is an Optional Attribute
 			// Error; the attribute echo is attached by RawAttribute.Parse.
 			_, err := parseEVPNRoutes(tt.b)
-			wantMessageError(t, err, NotificationUpdateMessageError, SubcodeOptionalAttributeError, nil)
+			wantMessageError(t, err, &Notification{
+				Code:    NotificationUpdateMessageError,
+				Subcode: SubcodeOptionalAttributeError,
+			})
 		})
 	}
 }
@@ -181,18 +230,19 @@ func TestParseLinkStateRoutes(t *testing.T) {
 	// Two records back to back, the second empty: the framing is a type, a
 	// two byte length, and a value of exactly that length, and this package
 	// validates nothing beyond it.
-	b := []byte{
+	got, err := parseLinkStateRoutes([]byte{
 		0, 1, 0, 4, 0xde, 0xad, 0xbe, 0xef,
 		0, 2, 0, 0,
-	}
-
-	got, err := parseLinkStateRoutes(b)
+	})
 	if err != nil {
 		t.Fatalf("failed to parse BGP-LS routes: %v", err)
 	}
 
 	want := LinkStateRoutes{
-		{Type: LinkStateRouteNode, Value: []byte{0xde, 0xad, 0xbe, 0xef}},
+		{
+			Type:  LinkStateRouteNode,
+			Value: []byte{0xde, 0xad, 0xbe, 0xef},
+		},
 		{Type: LinkStateRouteLink},
 	}
 
@@ -227,7 +277,10 @@ func TestParseLinkStateRoutesErrors(t *testing.T) {
 			t.Parallel()
 
 			_, err := parseLinkStateRoutes(tt.b)
-			wantMessageError(t, err, NotificationUpdateMessageError, SubcodeOptionalAttributeError, nil)
+			wantMessageError(t, err, &Notification{
+				Code:    NotificationUpdateMessageError,
+				Subcode: SubcodeOptionalAttributeError,
+			})
 		})
 	}
 }
@@ -246,18 +299,27 @@ func TestNLRINeverAliasesBuffer(t *testing.T) {
 	}{
 		{
 			name: "EVPN routes",
-			f:    Family{AFI: AFIL2VPN, SAFI: SAFIEVPN},
-			b:    []byte{2, 4, 0xde, 0xad, 0xbe, 0xef},
+			f: Family{
+				AFI:  AFIL2VPN,
+				SAFI: SAFIEVPN,
+			},
+			b: []byte{2, 4, 0xde, 0xad, 0xbe, 0xef},
 		},
 		{
 			name: "BGP-LS routes",
-			f:    Family{AFI: AFILinkState, SAFI: SAFILinkState},
-			b:    []byte{0, 1, 0, 4, 0xde, 0xad, 0xbe, 0xef},
+			f: Family{
+				AFI:  AFILinkState,
+				SAFI: SAFILinkState,
+			},
+			b: []byte{0, 1, 0, 4, 0xde, 0xad, 0xbe, 0xef},
 		},
 		{
 			name: "raw NLRI",
-			f:    Family{AFI: AFIL2VPN, SAFI: SAFIVPLS},
-			b:    []byte{0x00, 0x11, 0xde, 0xad},
+			f: Family{
+				AFI:  AFIL2VPN,
+				SAFI: SAFIVPLS,
+			},
+			b: []byte{0x00, 0x11, 0xde, 0xad},
 		},
 	}
 
@@ -297,7 +359,10 @@ func TestRawNLRIBelongsToAnyFamily(t *testing.T) {
 	// 7911 on a session whose negotiation this package did not see.
 	raw := RawNLRI{0x00, 0x00, 0x00, 0x01, 24, 192, 0, 2}
 
-	b, err := raw.appendNLRI(nil, Family{AFI: AFIIPv4, SAFI: SAFIUnicast})
+	b, err := raw.appendNLRI(nil, Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIUnicast,
+	})
 	if err != nil {
 		t.Fatalf("failed to append raw NLRI: %v", err)
 	}
@@ -314,26 +379,86 @@ func TestFamilyString(t *testing.T) {
 		f Family
 		s string
 	}{
-		{f: Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, s: "IPv4 unicast"},
-		{f: Family{AFI: AFIIPv6, SAFI: SAFIMulticast}, s: "IPv6 multicast"},
-		{f: Family{AFI: AFIL2VPN, SAFI: SAFIEVPN}, s: "L2VPN EVPN"},
-		{f: Family{AFI: AFIL2VPN, SAFI: SAFIVPLS}, s: "L2VPN VPLS"},
-		{f: Family{AFI: AFILinkState, SAFI: SAFILinkState}, s: "BGP-LS link-state"},
-		{f: Family{AFI: AFILinkState, SAFI: SAFILinkStateVPN}, s: "BGP-LS link-state VPN"},
+		{
+			f: Family{
+				AFI:  AFIIPv4,
+				SAFI: SAFIUnicast,
+			},
+			s: "IPv4 unicast",
+		},
+		{
+			f: Family{
+				AFI:  AFIIPv6,
+				SAFI: SAFIMulticast,
+			},
+			s: "IPv6 multicast",
+		},
+		{
+			f: Family{
+				AFI:  AFIL2VPN,
+				SAFI: SAFIEVPN,
+			},
+			s: "L2VPN EVPN",
+		},
+		{
+			f: Family{
+				AFI:  AFIL2VPN,
+				SAFI: SAFIVPLS,
+			},
+			s: "L2VPN VPLS",
+		},
+		{
+			f: Family{
+				AFI:  AFILinkState,
+				SAFI: SAFILinkState,
+			},
+			s: "BGP-LS link-state",
+		},
+		{
+			f: Family{
+				AFI:  AFILinkState,
+				SAFI: SAFILinkStateVPN,
+			},
+			s: "BGP-LS link-state VPN",
+		},
 		// Each half degrades on its own, so one unnamed number never hides
 		// the other half's name.
-		{f: Family{AFI: 3, SAFI: 133}, s: "AFI 3 SAFI 133"},
-		{f: Family{AFI: AFIL2VPN, SAFI: SAFIMPLSVPN}, s: "L2VPN MPLS VPN"},
-		{f: Family{AFI: AFIIPv4, SAFI: 133}, s: "IPv4 SAFI 133"},
-		{f: Family{AFI: 3, SAFI: SAFIUnicast}, s: "AFI 3 unicast"},
+		{
+			f: Family{
+				AFI:  3,
+				SAFI: 133,
+			},
+			s: "AFI 3 SAFI 133",
+		},
+		{
+			f: Family{
+				AFI:  AFIL2VPN,
+				SAFI: SAFIMPLSVPN,
+			},
+			s: "L2VPN MPLS VPN",
+		},
+		{
+			f: Family{
+				AFI:  AFIIPv4,
+				SAFI: 133,
+			},
+			s: "IPv4 SAFI 133",
+		},
+		{
+			f: Family{
+				AFI:  3,
+				SAFI: SAFIUnicast,
+			},
+			s: "AFI 3 unicast",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.s, func(t *testing.T) {
 			t.Parallel()
 
-			if d := diff(t, tt.s, tt.f.String()); d != "" {
-				t.Fatalf("unexpected family string (-want +got):\n%s", d)
+			if got := tt.f.String(); got != tt.s {
+				t.Fatalf("unexpected family string: got %q, want %q", got, tt.s)
 			}
 		})
 	}
@@ -346,20 +471,38 @@ func TestEVPNRouteTypeString(t *testing.T) {
 		t EVPNRouteType
 		s string
 	}{
-		{t: EVPNRouteEthernetAutoDiscovery, s: "Ethernet Auto-Discovery"},
-		{t: EVPNRouteMACIPAdvertisement, s: "MAC/IP Advertisement"},
-		{t: EVPNRouteInclusiveMulticastEthernetTag, s: "Inclusive Multicast Ethernet Tag"},
-		{t: EVPNRouteEthernetSegment, s: "Ethernet Segment"},
-		{t: EVPNRouteIPPrefix, s: "IP Prefix"},
-		{t: 6, s: "EVPN route type 6"},
+		{
+			t: EVPNRouteEthernetAutoDiscovery,
+			s: "Ethernet Auto-Discovery",
+		},
+		{
+			t: EVPNRouteMACIPAdvertisement,
+			s: "MAC/IP Advertisement",
+		},
+		{
+			t: EVPNRouteInclusiveMulticastEthernetTag,
+			s: "Inclusive Multicast Ethernet Tag",
+		},
+		{
+			t: EVPNRouteEthernetSegment,
+			s: "Ethernet Segment",
+		},
+		{
+			t: EVPNRouteIPPrefix,
+			s: "IP Prefix",
+		},
+		{
+			t: 6,
+			s: "EVPN route type 6",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.s, func(t *testing.T) {
 			t.Parallel()
 
-			if d := diff(t, tt.s, tt.t.String()); d != "" {
-				t.Fatalf("unexpected EVPN route type string (-want +got):\n%s", d)
+			if got := tt.t.String(); got != tt.s {
+				t.Fatalf("unexpected EVPN route type string: got %q, want %q", got, tt.s)
 			}
 		})
 	}

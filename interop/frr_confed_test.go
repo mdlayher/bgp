@@ -5,7 +5,6 @@ package interop
 import (
 	"context"
 	"net/netip"
-	"slices"
 	"testing"
 	"time"
 
@@ -15,8 +14,7 @@ import (
 // Scenario 10: AS confederations (RFC 5065). FRR is a confederation
 // member and library speaker A is another member, so their session is
 // confederation eBGP and FRR's AS_PATH toward A carries
-// AS_CONFED_SEQUENCE segments: the wire form which used to reset the
-// session as Malformed AS_PATH. Library speaker B peers with FRR from
+// AS_CONFED_SEQUENCE segments. Library speaker B peers with FRR from
 // outside the confederation and sees it as the confederation's public
 // AS.
 //
@@ -36,6 +34,9 @@ const (
 // confederation identifier rather than the member AS, or B never
 // establishes.
 func TestFRRConfederation(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	const libASNB uint32 = 64498
 
 	f := startFRR(t, frrConfig{
@@ -44,8 +45,14 @@ func TestFRRConfederation(t *testing.T) {
 		ConfederationID:    frrASN,
 		ConfederationPeers: []uint32{libMemberASN},
 		Neighbors: []frrNeighbor{
-			{Addr: hostAddr4, ASN: libMemberASN},
-			{Addr: hostAddr6, ASN: libASNB},
+			{
+				Addr: hostAddr4,
+				ASN:  libMemberASN,
+			},
+			{
+				Addr: hostAddr6,
+				ASN:  libASNB,
+			},
 		},
 		NetworksV4: []netip.Prefix{prefixV4A},
 	})
@@ -62,12 +69,15 @@ func TestFRRConfederation(t *testing.T) {
 	awaitSession(t, estabA)
 
 	// FRR's own route: an AS_CONFED_SEQUENCE of its member AS alone,
-	// exactly the fixture that once reset sessions. It originated
+	// the root package's regression fixture. It originated
 	// inside the confederation, so the path names no origin.
 	r := awaitRoute(t, routes, prefixV4A)
-	want := bgp.ASPath{{Confed: true, ASNs: []uint32{frrMemberASN}}}
-	if !equalASPath(r.Path, want) {
-		t.Fatalf("unexpected AS path: got %+v, want %+v", r.Path, want)
+	want := bgp.ASPath{{
+		Confed: true,
+		ASNs:   []uint32{frrMemberASN},
+	}}
+	if d := diff(t, want, r.Path); d != "" {
+		t.Fatalf("unexpected AS path (-want +got):\n%s", d)
 	}
 
 	if got, want := r.Path.Origin(), (bgp.OriginAS{Empty: true}); got != want {
@@ -111,19 +121,22 @@ func TestFRRConfederation(t *testing.T) {
 	// path, and the origin skips the confederation record.
 	r = awaitRoute(t, routes, prefixV4B)
 	want = bgp.ASPath{
-		{Confed: true, ASNs: []uint32{frrMemberASN}},
+		{
+			Confed: true,
+			ASNs:   []uint32{frrMemberASN},
+		},
 		{ASNs: []uint32{libASNB}},
 	}
-	if !equalASPath(r.Path, want) {
-		t.Fatalf("unexpected AS path: got %+v, want %+v", r.Path, want)
+	if d := diff(t, want, r.Path); d != "" {
+		t.Fatalf("unexpected AS path (-want +got):\n%s", d)
 	}
 
 	if got, want := r.Path.Origin(), (bgp.OriginAS{ASN: libASNB}); got != want {
 		t.Errorf("unexpected origin AS: got %+v, want %+v", got, want)
 	}
 
-	if got, want := r.ASPath, []uint32{libASNB}; !slices.Equal(got, want) {
-		t.Errorf("unexpected flattened AS path: got %v, want %v", got, want)
+	if d := diff(t, []uint32{libASNB}, r.ASPath); d != "" {
+		t.Errorf("unexpected flattened AS path (-want +got):\n%s", d)
 	}
 
 	if got, want := r.Origin, bgp.OriginIGP; got != want {
@@ -136,12 +149,4 @@ func TestFRRConfederation(t *testing.T) {
 	if got, want := r.NextHop, hostAddr4; got != want {
 		t.Errorf("unexpected next hop: got %s, want %s", got, want)
 	}
-}
-
-// equalASPath reports whether two AS paths carry the same segments:
-// the same type and the same ASNs in the same order.
-func equalASPath(a, b bgp.ASPath) bool {
-	return slices.EqualFunc(a, b, func(x, y bgp.ASSegment) bool {
-		return x.Set == y.Set && x.Confed == y.Confed && slices.Equal(x.ASNs, y.ASNs)
-	})
 }

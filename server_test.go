@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"net/netip"
-	"slices"
 	"sync"
 	"syscall"
 	"testing"
@@ -125,8 +124,8 @@ func TestServerPeers(t *testing.T) {
 		}
 	}
 
-	if !slices.Equal(want, got) {
-		t.Fatalf("unexpected peers:\nwant: %v\n got: %v", want, got)
+	if d := diff(t, want, got); d != "" {
+		t.Fatalf("unexpected peers (-want +got):\n%s", d)
 	}
 
 	for addr := range s.Peers() {
@@ -166,7 +165,7 @@ func TestServerRunLifecycle(t *testing.T) {
 }
 
 // TestServerAddBeforeRun verifies start ordering and removal: a peer added
-// before Run is started by Run, and RemovePeer is synchronous — when it
+// before Run is started by Run, and RemovePeer is synchronous: when it
 // returns, Peer De-configured is already on the wire and the peer's run has
 // drained.
 func TestServerAddBeforeRun(t *testing.T) {
@@ -269,8 +268,16 @@ func TestServerDemuxTCP(t *testing.T) {
 		asn  uint32
 		addr netip.Addr
 	}{
-		{ev: ev1, asn: 64497, addr: addr1},
-		{ev: ev2, asn: 64498, addr: addr2},
+		{
+			ev:   ev1,
+			asn:  64497,
+			addr: addr1,
+		},
+		{
+			ev:   ev2,
+			asn:  64498,
+			addr: addr2,
+		},
 	} {
 		if _, err := s.AddPeer(p.addr, p.ev.wire(PeerConfig{
 			LocalASN: 64496,
@@ -361,6 +368,7 @@ func TestServerShutdownCausePropagationTCP(t *testing.T) {
 		LocalID:  MustParseIdentifier("192.0.2.2"),
 		PeerASN:  64496,
 	})
+
 	recv(t, ev.estC, "server peer establishment")
 	recv(t, b.estC, "remote establishment")
 
@@ -402,7 +410,11 @@ func TestServerUnconfiguredPeerTCP(t *testing.T) {
 	l := loopbackListener(t)
 	s := testServer(t, ServerConfig{
 		OnUnconfiguredPeer: func(_ context.Context, raddr netip.AddrPort, o *Open) {
-			k := knock{raddr: raddr, open: o != nil}
+			k := knock{
+				raddr: raddr,
+				open:  o != nil,
+			}
+
 			if o != nil {
 				k.asn = o.ASN
 			}
@@ -410,6 +422,7 @@ func TestServerUnconfiguredPeerTCP(t *testing.T) {
 			knockC <- k
 		},
 	})
+
 	runServer(t, s, l)
 
 	// expectRejected reads the farewell and then the close.
@@ -511,6 +524,7 @@ func TestServerMD5TCP(t *testing.T) {
 		PeerASN:     64496,
 		MD5Password: password,
 	})
+
 	recv(t, ev.estC, "server peer establishment")
 	recv(t, b.estC, "remote establishment")
 }
@@ -682,6 +696,7 @@ func TestServerChurnTCP(t *testing.T) {
 	s := testServer(t, ServerConfig{
 		OnUnconfiguredPeer: func(context.Context, netip.AddrPort, *Open) {},
 	})
+
 	runServer(t, s, l)
 	lap := addrPort(l)
 
@@ -745,8 +760,8 @@ func TestServerChurnTCP(t *testing.T) {
 
 // TestServerRunRestartChurn restarts Run repeatedly while a peer is added
 // and removed, exercising the setup/teardown window. Contributed by
-// adversarial review; the original paced with a sleep, replaced here by
-// deterministic alternation between canceling a live run and racing setup.
+// adversarial review. Runs alternate deterministically between canceling a
+// live run and racing setup.
 func TestServerRunRestartChurn(t *testing.T) {
 	t.Parallel()
 
@@ -888,20 +903,14 @@ func runServer(tb testing.TB, s *Server, ls ...*Listener) context.CancelCauseFun
 func waitServerUp(tb testing.TB, s *Server) {
 	tb.Helper()
 
-	s.mu.Lock()
-	runningC := s.runningC
-	s.mu.Unlock()
-
+	runningC, _ := s.running()
 	select {
 	case <-runningC:
 	case <-time.After(peerTimeout):
 		tb.Fatal("timed out waiting for the server run to start")
 	}
 
-	s.mu.Lock()
-	live := s.run != nil
-	s.mu.Unlock()
-	if !live {
+	if _, live := s.running(); !live {
 		tb.Fatal("the server run failed before going live")
 	}
 }
@@ -931,7 +940,10 @@ func acceptScriptOn(tb testing.TB, l net.Listener) *script {
 	acceptC := make(chan accepted, 1)
 	go func() {
 		c, err := l.Accept()
-		acceptC <- accepted{c: c, err: err}
+		acceptC <- accepted{
+			c:   c,
+			err: err,
+		}
 	}()
 
 	a := recv(tb, acceptC, "the peer to dial")

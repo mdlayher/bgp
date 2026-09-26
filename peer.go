@@ -307,9 +307,8 @@ func NewPeer(addr netip.Addr, c PeerConfig) (*Peer, error) {
 		// The active open's transport: the Dialer, with addr as its target
 		// and the peering's TCP-MD5 key applied, compiled down to the FSM's
 		// one seam.
-		d, md5 := c.Dialer, c.MD5Password
 		fc.DialFunc = func(ctx context.Context) (*Conn, error) {
-			return d.dial(ctx, addr, md5)
+			return c.Dialer.dial(ctx, addr, c.MD5Password)
 		}
 	}
 
@@ -318,45 +317,45 @@ func NewPeer(addr netip.Addr, c PeerConfig) (*Peer, error) {
 	// the caller sees them, and Session and Close are owned already. A nil
 	// caller handler stays nil on the FSM, so unobserved events cost no
 	// copy.
-	if h := c.OnEstablished; h != nil {
+	if c.OnEstablished != nil {
 		fc.OnEstablished = func(ctx context.Context, _ *FSM, s Session) error {
-			return h(ctx, p, s)
+			return c.OnEstablished(ctx, p, s)
 		}
 	}
 
-	if h := c.OnUpdate; h != nil {
+	if c.OnUpdate != nil {
 		fc.OnUpdate = func(ctx context.Context, _ *FSM, u *Update, d *UpdateDiagnostics) error {
-			return h(ctx, p, u.Clone(), d.Clone())
+			return c.OnUpdate(ctx, p, u.Clone(), d.Clone())
 		}
 	}
 
-	if h := c.OnRouteRefresh; h != nil {
+	if c.OnRouteRefresh != nil {
 		fc.OnRouteRefresh = func(ctx context.Context, _ *FSM, r *RouteRefresh) error {
-			return h(ctx, p, r.Clone())
+			return c.OnRouteRefresh(ctx, p, r.Clone())
 		}
 	}
 
-	if h := c.OnKeepalive; h != nil {
+	if c.OnKeepalive != nil {
 		fc.OnKeepalive = func(ctx context.Context, _ *FSM) error {
-			return h(ctx, p)
+			return c.OnKeepalive(ctx, p)
 		}
 	}
 
-	if h := c.OnClose; h != nil {
+	if c.OnClose != nil {
 		fc.OnClose = func(_ *FSM, cl Close) {
-			h(p, cl)
+			c.OnClose(p, cl)
 		}
 	}
 
-	if h := c.OnStateChange; h != nil {
+	if c.OnStateChange != nil {
 		fc.OnStateChange = func(_ *FSM, from, to State) {
-			h(p, from, to)
+			c.OnStateChange(p, from, to)
 		}
 	}
 
-	if h := c.OnMessage; h != nil {
+	if c.OnMessage != nil {
 		fc.OnMessage = func(_ *FSM, e MessageEvent) {
-			h(p, e.clone())
+			c.OnMessage(p, e.clone())
 		}
 	}
 
@@ -432,6 +431,14 @@ func (p *Peer) run(ctx context.Context) error {
 	}
 }
 
+// running returns the channel which is closed while a Run is active. A
+// receive blocks until Run starts; the channel is remade when Run returns.
+func (p *Peer) running() <-chan struct{} {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.runningC
+}
+
 // idleHold pauses after a session failure before the next Connect: the
 // Idle state's hold. A connection delivered meanwhile ends the hold early
 // and is returned to seed the next attempt: the remote's open is
@@ -489,9 +496,9 @@ func (p *Peer) deliverConn(c *Conn) error {
 	// so the caller's choice of Peer is the only check there is. The FSM
 	// below checks nothing: it carries no addressing.
 	if ta, ok := c.RemoteAddr().(*net.TCPAddr); ok {
-		if want := p.addr; want.IsValid() {
-			if addr := ta.AddrPort().Addr().Unmap(); addr != want {
-				return fmt.Errorf("bgp: connection from %s does not match peer address %s", addr, want)
+		if p.addr.IsValid() {
+			if addr := ta.AddrPort().Addr().Unmap(); addr != p.addr {
+				return fmt.Errorf("bgp: connection from %s does not match peer address %s", addr, p.addr)
 			}
 		}
 	}

@@ -20,10 +20,17 @@ const md5Password = "interop-md5"
 
 // TestFRRMD5Active dials FRR with matching MD5 keys on both sides.
 func TestFRRMD5Active(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	f := startFRR(t, frrConfig{
-		ASN:       frrASN,
-		RouterID:  frrRouterID,
-		Neighbors: []frrNeighbor{{Addr: hostAddr4, ASN: libASN, Password: md5Password}},
+		ASN:      frrASN,
+		RouterID: frrRouterID,
+		Neighbors: []frrNeighbor{{
+			Addr:     hostAddr4,
+			ASN:      libASN,
+			Password: md5Password,
+		}},
 	})
 
 	_, estab := runPeer(t, netip.AddrPortFrom(f.Addr, bgp.Port), bgp.PeerConfig{
@@ -40,7 +47,10 @@ func TestFRRMD5Active(t *testing.T) {
 // TestFRRMD5Passive has FRR dial a Server whose listener carries the
 // peering's key, installed before FRR's SYN can arrive.
 func TestFRRMD5Passive(t *testing.T) {
-	_, estab, port := runServer(t, netip.AddrPortFrom(netip.MustParseAddr(frrV4), 0), bgp.PeerConfig{
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
+	_, estab, port := runServer(t, bgp.PeerConfig{
 		LocalASN:    libASN,
 		LocalID:     libID,
 		PeerASN:     frrASN,
@@ -69,10 +79,17 @@ func TestFRRMD5Passive(t *testing.T) {
 // observable is absence: no session within the window, and FRR never
 // leaves its connect states.
 func TestFRRMD5Mismatch(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	f := startFRR(t, frrConfig{
-		ASN:       frrASN,
-		RouterID:  frrRouterID,
-		Neighbors: []frrNeighbor{{Addr: hostAddr4, ASN: libASN, Password: md5Password}},
+		ASN:      frrASN,
+		RouterID: frrRouterID,
+		Neighbors: []frrNeighbor{{
+			Addr:     hostAddr4,
+			ASN:      libASN,
+			Password: md5Password,
+		}},
 	})
 
 	_, estab := runPeer(t, netip.AddrPortFrom(f.Addr, bgp.Port), bgp.PeerConfig{
@@ -95,10 +112,17 @@ func TestFRRMD5Mismatch(t *testing.T) {
 // TestFRRGTSMActive dials FRR with GTSM on both sides: our Dialer
 // sends TTL 255 and FRR's ttl-security requires it.
 func TestFRRGTSMActive(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
 	f := startFRR(t, frrConfig{
-		ASN:       frrASN,
-		RouterID:  frrRouterID,
-		Neighbors: []frrNeighbor{{Addr: hostAddr4, ASN: libASN, TTLSecurity: true}},
+		ASN:      frrASN,
+		RouterID: frrRouterID,
+		Neighbors: []frrNeighbor{{
+			Addr:        hostAddr4,
+			ASN:         libASN,
+			TTLSecurity: true,
+		}},
 	})
 
 	_, estab := runPeer(t, netip.AddrPortFrom(f.Addr, bgp.Port), bgp.PeerConfig{
@@ -115,13 +139,16 @@ func TestFRRGTSMActive(t *testing.T) {
 // TestFRRGTSMPassive has FRR dial a GTSM listener: accepted
 // connections inherit the whole-socket TTL floor.
 func TestFRRGTSMPassive(t *testing.T) {
-	_, estab, port := runServer(t, netip.AddrPortFrom(netip.MustParseAddr(frrV4), 0), bgp.PeerConfig{
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
+	_, estab, port := runServer(t, bgp.PeerConfig{
 		LocalASN: libASN,
 		LocalID:  libID,
 		PeerASN:  frrASN,
 		Families: families,
 		Passive:  true,
-	}, bgp.ListenConfig{TCPOptions: bgp.TCPOptions{GTSM: true}})
+	}, bgp.ListenConfig{GTSM: true})
 
 	f := startFRR(t, frrConfig{
 		ASN:      frrASN,
@@ -144,21 +171,24 @@ func TestFRRGTSMPassive(t *testing.T) {
 // any handshake. Absence again is the assertion.
 //
 // The violation is deliberately probed in this direction only. The
-// reverse — dialing FRR without GTSM while its ttl-security requires
-// it — establishes transiently on occasion (observed with 10.7.0):
+// reverse, dialing FRR without GTSM while its ttl-security requires
+// it, establishes transiently on occasion, as observed with 10.7.0.
 // FRR installs IP_MINTTL on the accepted socket only after accept, so
 // an OPEN exchange completing in the initial burst slips through
 // before enforcement, and the session dies at hold expiry instead.
 // Our listener has no such race: the Server installs the floor at
 // bind, before any SYN can be answered.
 func TestFRRGTSMViolation(t *testing.T) {
-	_, estab, port := runServer(t, netip.AddrPortFrom(netip.MustParseAddr(frrV4), 0), bgp.PeerConfig{
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
+	_, estab, port := runServer(t, bgp.PeerConfig{
 		LocalASN: libASN,
 		LocalID:  libID,
 		PeerASN:  frrASN,
 		Families: families,
 		Passive:  true,
-	}, bgp.ListenConfig{TCPOptions: bgp.TCPOptions{GTSM: true}})
+	}, bgp.ListenConfig{GTSM: true})
 
 	f := startFRR(t, frrConfig{
 		ASN:      frrASN,

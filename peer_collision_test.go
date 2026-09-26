@@ -164,19 +164,21 @@ func TestPeerCollision(t *testing.T) {
 			})
 		})
 	}
+}
 
-	// A confirming KEEPALIVE arriving while the other connection is still
-	// in OpenSent establishes the confirmed connection and drops the other,
-	// regardless of identifier order: the peer demonstrably accepted our
-	// OPEN on the confirmed connection, and an RFC-default peer has already
-	// established there, so a tie-break preferring the other connection
-	// would tear down the one connection both speakers agree on. Both
-	// identifier orderings pin that no tie-break runs; under the section
-	// 6.8 comparison the higher-id case would kill the dialed connection.
-	ceaseCollision := &Notification{
-		Code:    NotificationCease,
-		Subcode: SubcodeCeaseConnectionCollisionResolution,
-	}
+// TestPeerCollisionKeepaliveFirst verifies that a confirming KEEPALIVE
+// arriving while the other connection is still in OpenSent establishes the
+// confirmed connection and drops the other, regardless of identifier order:
+// the peer demonstrably accepted our OPEN on the confirmed connection, and an
+// RFC-default peer has already established there, so a tie-break preferring
+// the other connection would tear down the one connection both speakers
+// agree on. Both identifier orderings pin that no tie-break runs; under the
+// section 6.8 comparison the higher-id case would kill the dialed connection.
+func TestPeerCollisionKeepaliveFirst(t *testing.T) {
+	t.Parallel()
+
+	// The local speaker is ASN 64496, identifier 192.0.2.10.
+	localID := MustParseIdentifier("192.0.2.10")
 
 	for _, peerID := range []Identifier{
 		MustParseIdentifier("192.0.2.20"), // higher than localID
@@ -207,7 +209,10 @@ func TestPeerCollision(t *testing.T) {
 
 				// The dialed connection establishes; the accepted connection is
 				// dropped, whatever the identifiers say.
-				accepted.expectNotification(ceaseCollision)
+				accepted.expectNotification(&Notification{
+					Code:    NotificationCease,
+					Subcode: SubcodeCeaseConnectionCollisionResolution,
+				})
 				accepted.expectClosed()
 				sess := recv(t, r.estC, "session establishment")
 				if d := diff(t, peerID, sess.Peer.ID); d != "" {
@@ -216,10 +221,18 @@ func TestPeerCollision(t *testing.T) {
 			})
 		})
 	}
+}
 
-	// A peer which claims a different identity on each collision connection
-	// must not steer the tie-break: the first accepted claim wins, and a
-	// contradicting OPEN is rejected.
+// TestPeerCollisionContradiction verifies that a peer which claims a
+// different identity on each collision connection cannot steer the
+// tie-break: the first accepted claim wins, and a contradicting OPEN is
+// rejected.
+func TestPeerCollisionContradiction(t *testing.T) {
+	t.Parallel()
+
+	// The local speaker is ASN 64496, identifier 192.0.2.10.
+	localID := MustParseIdentifier("192.0.2.10")
+
 	contradictions := []struct {
 		name   string
 		mutate func(o *Open)
@@ -254,7 +267,12 @@ func TestPeerCollision(t *testing.T) {
 					ID:       MustParseIdentifier("192.0.2.2"),
 				}
 
-				second := &Open{ASN: first.ASN, HoldTime: first.HoldTime, ID: first.ID}
+				second := &Open{
+					ASN:      first.ASN,
+					HoldTime: first.HoldTime,
+					ID:       first.ID,
+				}
+
 				tt.mutate(second)
 
 				r := newPipeRig(t, PeerConfig{LocalID: localID})
@@ -318,15 +336,22 @@ func TestPeerCollisionEstablished(t *testing.T) {
 func TestPeerSelfPeering(t *testing.T) {
 	t.Parallel()
 
-	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
-	v6u := Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+	v4u := Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIUnicast,
+	}
+
+	v6u := Family{
+		AFI:  AFIIPv6,
+		SAFI: SAFIUnicast,
+	}
 
 	l, err := nettest.NewLocalListener("tcp")
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}
 
-	defer func() { _ = l.Close() }()
+	t.Cleanup(func() { _ = l.Close() })
 	laddr := l.Addr().(*net.TCPAddr).AddrPort()
 
 	// Each side's OnUpdate hands the received prefixes to the test. The
@@ -391,6 +416,7 @@ func TestPeerSelfPeering(t *testing.T) {
 		},
 		Logger: testLogger(t),
 	})
+
 	if err := passive.p.DeliverConn(NewConn(nc)); err != nil {
 		t.Fatalf("failed to deliver connection: %v", err)
 	}
@@ -422,8 +448,16 @@ func TestPeerSelfPeering(t *testing.T) {
 		to   chan []netip.Prefix
 		p    netip.Prefix
 	}{
-		{from: active, to: passiveUpdC, p: netip.MustParsePrefix("203.0.113.0/24")},
-		{from: passive, to: activeUpdC, p: netip.MustParsePrefix("198.51.100.0/24")},
+		{
+			from: active,
+			to:   passiveUpdC,
+			p:    netip.MustParsePrefix("203.0.113.0/24"),
+		},
+		{
+			from: passive,
+			to:   activeUpdC,
+			p:    netip.MustParsePrefix("198.51.100.0/24"),
+		},
 	} {
 		if err := x.from.p.SendUpdate(context.Background(), &Update{
 			Attributes: attrs,
@@ -461,12 +495,12 @@ func TestPeerSelfPeering(t *testing.T) {
 
 	ca := recv(t, active.closeC, "active session close")
 	if d := diff(t, want, ca.Notification); d != "" || !ca.Local {
-		t.Fatalf("unexpected active close (local=%t) (-want +got):\n%s", !ca.Local, d)
+		t.Fatalf("unexpected active close (local=%t) (-want +got):\n%s", ca.Local, d)
 	}
 
 	cp := recv(t, passive.closeC, "passive session close")
 	if d := diff(t, want, cp.Notification); d != "" || cp.Local {
-		t.Fatalf("unexpected passive close (local=%t) (-want +got):\n%s", !cp.Local, d)
+		t.Fatalf("unexpected passive close (local=%t) (-want +got):\n%s", cp.Local, d)
 	}
 }
 
@@ -475,7 +509,7 @@ func TestPeerSelfPeering(t *testing.T) {
 // teardown, driven through the transport seams rather than the TCP paths.
 // The active side dials through PeerConfig.DialFunc and the passive side
 // takes a delivered *net.UnixConn, which together pin the two properties a
-// non-TCP transport depends on — a dial the package does not perform itself,
+// non-TCP transport depends on: a dial the package does not perform itself,
 // and an accept whose remote address no raddr could be matched against.
 //
 // Nothing in the FSM is transport-aware, so this test's value is the seams,
@@ -483,8 +517,15 @@ func TestPeerSelfPeering(t *testing.T) {
 func TestPeerSelfPeeringUnix(t *testing.T) {
 	t.Parallel()
 
-	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
-	v6u := Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
+	v4u := Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIUnicast,
+	}
+
+	v6u := Family{
+		AFI:  AFIIPv6,
+		SAFI: SAFIUnicast,
+	}
 
 	// The socket lives in the test's own directory, which is removed with
 	// it. Unix socket paths are bounded well below PATH_MAX, so the name is
@@ -495,7 +536,7 @@ func TestPeerSelfPeeringUnix(t *testing.T) {
 		t.Fatalf("failed to listen on a Unix socket: %v", err)
 	}
 
-	defer func() { _ = l.Close() }()
+	t.Cleanup(func() { _ = l.Close() })
 
 	// Each side's OnUpdate hands the received prefixes to the test. The
 	// Update references the read buffer, so the handler clones what it
@@ -508,7 +549,7 @@ func TestPeerSelfPeeringUnix(t *testing.T) {
 	passiveKaC := make(chan struct{}, 1)
 
 	// A Unix socket peering has no address space to name its peers in, so
-	// each side's addr is zero — the unaddressed-transport allowance — and
+	// each side's addr is zero, the unaddressed-transport allowance, and
 	// the DialFunc closes over the socket path, its own notion of where.
 	// Who may answer is pinned by PeerASN, exactly as over TCP.
 
@@ -549,9 +590,9 @@ func TestPeerSelfPeeringUnix(t *testing.T) {
 		t.Fatalf("failed to accept: %v", err)
 	}
 
-	// The accepted side of a Unix socket reports an unnamed remote — an
-	// autobind address, not the socket's path — so no raddr could ever be
-	// matched against it. Pinning that here says why the passive side must
+	// The accepted side of a Unix socket reports an unnamed remote, an
+	// autobind address rather than the socket's path, so no raddr could ever
+	// be matched against it. Pinning that here says why the passive side must
 	// accept the connection on the caller's word alone.
 	ua, ok := nc.RemoteAddr().(*net.UnixAddr)
 	if !ok {
@@ -583,6 +624,7 @@ func TestPeerSelfPeeringUnix(t *testing.T) {
 		},
 		Logger: testLogger(t),
 	})
+
 	if err := passive.p.DeliverConn(NewConn(nc)); err != nil {
 		t.Fatalf("failed to deliver connection: %v", err)
 	}
@@ -615,8 +657,16 @@ func TestPeerSelfPeeringUnix(t *testing.T) {
 		to   chan []netip.Prefix
 		p    netip.Prefix
 	}{
-		{from: active, to: passiveUpdC, p: netip.MustParsePrefix("203.0.113.0/24")},
-		{from: passive, to: activeUpdC, p: netip.MustParsePrefix("198.51.100.0/24")},
+		{
+			from: active,
+			to:   passiveUpdC,
+			p:    netip.MustParsePrefix("203.0.113.0/24"),
+		},
+		{
+			from: passive,
+			to:   activeUpdC,
+			p:    netip.MustParsePrefix("198.51.100.0/24"),
+		},
 	} {
 		if err := x.from.p.SendUpdate(context.Background(), &Update{
 			Attributes: attrs,
@@ -655,12 +705,12 @@ func TestPeerSelfPeeringUnix(t *testing.T) {
 
 	ca := recv(t, active.closeC, "active session close")
 	if d := diff(t, want, ca.Notification); d != "" || !ca.Local {
-		t.Fatalf("unexpected active close (local=%t) (-want +got):\n%s", !ca.Local, d)
+		t.Fatalf("unexpected active close (local=%t) (-want +got):\n%s", ca.Local, d)
 	}
 
 	cp := recv(t, passive.closeC, "passive session close")
 	if d := diff(t, want, cp.Notification); d != "" || cp.Local {
-		t.Fatalf("unexpected passive close (local=%t) (-want +got):\n%s", !cp.Local, d)
+		t.Fatalf("unexpected passive close (local=%t) (-want +got):\n%s", cp.Local, d)
 	}
 }
 

@@ -17,13 +17,12 @@ import (
 // marker's MPUnreachNLRI holds, and what parse produces for any family whose
 // NLRI is empty.
 //
-// Reachability information is not universally prefix shaped: the families of
-// RFC 4271 and RFC 4760 carry prefixes, EVPN and BGP-LS carry typed records
-// (RFC 7432, RFC 9552), and others carry route distinguishers, labels, or
-// flow specifications. A
-// family this package does not model decodes to RawNLRI rather than to an
-// error, so it survives parse and re-marshal byte for byte, as an unknown
-// attribute type does.
+// Reachability information is not universally prefix shaped. The families of
+// RFC 4271 and RFC 4760 carry prefixes, EVPN (RFC 7432) and BGP-LS (RFC 9552)
+// carry typed records, and others carry route distinguishers, labels, or flow
+// specifications. A family this package does not model decodes to RawNLRI
+// rather than to an error, so it survives parse and re-marshal byte for byte,
+// as an unknown attribute type does.
 type NLRI interface {
 	// appendNLRI appends the wire encoded NLRI for family f, which it may
 	// require to be a family the NLRI shape belongs to. This also constrains
@@ -123,10 +122,10 @@ func (t EVPNRouteType) String() string {
 // in RFC 7432, section 7: a route type and the type specific value it
 // frames.
 //
-// Value is deliberately opaque. Its interpretation (route distinguishers,
-// Ethernet segment identifiers, MAC addresses, Ethernet tags, VNIs, MPLS
-// labels) is the vocabulary of a layer 2 control plane, which is the
-// caller's side of this package's boundary. What this package owns is the
+// Value is deliberately opaque. Its interpretation is the vocabulary of a
+// layer 2 control plane, such as route distinguishers, Ethernet segment
+// identifiers, MAC addresses, Ethernet tags, VNIs, and MPLS labels, which is
+// the caller's side of this package's boundary. What this package owns is the
 // framing: a route type, a length, and a value of exactly that length.
 type EVPNRoute struct {
 	Type  EVPNRouteType
@@ -177,6 +176,7 @@ func parseEVPNRoutes(b []byte) (EVPNRoutes, error) {
 			// which ParseMessage is free to reuse between calls.
 			Value: bytes.Clone(b[2 : 2+n]),
 		})
+
 		b = b[2+n:]
 	}
 
@@ -221,10 +221,10 @@ func (t LinkStateRouteType) String() string {
 // A LinkStateRoute is one BGP-LS NLRI, as described in RFC 9552, section
 // 5.1: an NLRI type and the value it frames.
 //
-// Value is opaque. Its interpretation (the Protocol-ID, the Identifier, the
-// node, link, and prefix descriptor TLVs, and for the VPN SAFI the route
-// distinguisher which precedes them) is the vocabulary of a topology model,
-// which is the caller's side of this package's boundary. What this package
+// Value is opaque. Its interpretation is the vocabulary of a topology model,
+// which is the caller's side of this package's boundary. That vocabulary is
+// the Protocol-ID, the Identifier, the node, link, and prefix descriptor
+// TLVs, and for the VPN SAFI the route distinguisher which precedes them. What this package
 // owns is the framing: a type, a two byte length, and a value of exactly
 // that length.
 type LinkStateRoute struct {
@@ -277,6 +277,7 @@ func parseLinkStateRoutes(b []byte) (LinkStateRoutes, error) {
 			// Cloned for the reason parseEVPNRoutes clones.
 			Value: bytes.Clone(b[4 : 4+n]),
 		})
+
 		b = b[4+n:]
 	}
 

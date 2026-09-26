@@ -12,10 +12,14 @@ import (
 	"time"
 )
 
-// TestFSMGoroutinesEndWithConnect enforces the invariant FSM.attempt's deferred teardown
-// rests on: every goroutine an attempt starts — a reader per connection, the
-// session's writer, the dial and the drain of an abandoned one — has exited
-// by the time Connect returns. The teardown therefore stops only the dial
+// rigConnectRetry is the rig's jitter-free connect retry interval: the
+// lower bound of FSM.jittered, three quarters of connectRetryTime.
+const rigConnectRetry = 3 * connectRetryTime / 4
+
+// TestFSMGoroutinesEndWithConnect enforces the invariant FSM.attempt's
+// deferred teardown rests on: every goroutine an attempt starts has exited by
+// the time Connect returns. Those are a reader per connection, the session's
+// writer, and the dial and the drain of an abandoned one. The teardown therefore stops only the dial
 // and the retry timer, trusting each exit path to have killed and joined its
 // connections, and endSession to have joined the writer.
 //
@@ -68,7 +72,10 @@ func TestFSMGoroutinesEndWithConnect(t *testing.T) {
 				s.establish(scriptOpen())
 				recv(t, r.estC, "session establishment")
 
-				s.write(&Notification{Code: NotificationCease, Subcode: SubcodeCeaseAdministrativeReset})
+				s.write(&Notification{
+					Code:    NotificationCease,
+					Subcode: SubcodeCeaseAdministrativeReset,
+				})
 				s.expectClosed()
 				if err := r.wait(); err != nil {
 					t.Fatalf("unexpected Connect error: %v", err)
@@ -87,8 +94,8 @@ func TestFSMGoroutinesEndWithConnect(t *testing.T) {
 				accepted := r.deliver()
 				accepted.expectOpen()
 
-				// The peer's identifier is the higher, so its own connection
-				// — the accepted one — survives.
+				// The peer's identifier is the higher, so its own connection,
+				// the accepted one, survives.
 				accepted.write(scriptOpen())
 				dialed.expectNotification(ceaseCollision)
 				dialed.expectClosed()
@@ -216,8 +223,14 @@ func TestFSMGoroutinesEndWithConnect(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			synctest.Test(t, func(t *testing.T) {
-				r := newFSMRig(t, FSMConfig{Passive: tt.passive, DialFunc: tt.dial})
+				r := newFSMRig(t, FSMConfig{
+					Passive:  tt.passive,
+					DialFunc: tt.dial,
+				})
+
 				tt.run(t, r)
 
 				// Connect has returned: the session's connection is
@@ -229,10 +242,6 @@ func TestFSMGoroutinesEndWithConnect(t *testing.T) {
 		})
 	}
 }
-
-// rigConnectRetry is the rig's jitter-free connect retry interval: the
-// lower bound of FSM.jittered, three quarters of connectRetryTime.
-const rigConnectRetry = 3 * connectRetryTime / 4
 
 // TestFSMRetryAbandonsStaleDialBesideInbound verifies RFC 4271, section
 // 8.2.2's ConnectRetryTimer_Expires handling when the tick finds a dial still
@@ -261,6 +270,7 @@ func TestFSMRetryAbandonsStaleDialBesideInbound(t *testing.T) {
 			abandoned <- struct{}{}
 			return nil, ctx.Err()
 		}})
+
 		<-r.dialStarted
 
 		// An accepted connection arrives and stalls in OpenSent, with a
@@ -294,8 +304,8 @@ func TestFSMRetryAbandonsStaleDialBesideInbound(t *testing.T) {
 // its own FSM cannot re-enter it: Connect from any hook reports the attempt
 // already in progress rather than nesting another, and a send from OnClose
 // reports ErrNotEstablished, because the session is already down by the
-// time the close is reported. The hooks run on two goroutines — OnClose
-// and OnStateChange on the FSM's, the rest on the reader's — so each is
+// time the close is reported. The hooks run on two goroutines: OnClose and
+// OnStateChange on the FSM's, and the rest on the reader's. Each is
 // exercised in place, and the map of visited hooks proves every one fired.
 func TestFSMHooksRefuseReentry(t *testing.T) {
 	t.Parallel()
@@ -406,6 +416,7 @@ func TestFSMDialCompletesAfterEstablished(t *testing.T) {
 			scripts <- newScript(t, server)
 			return NewConn(client), nil
 		}})
+
 		<-r.dialStarted
 
 		// An accepted connection carries the attempt to Established while
@@ -469,6 +480,7 @@ func TestFSMAbandonedDialConnClosed(t *testing.T) {
 			scripts <- newScript(t, server)
 			return NewConn(client), nil
 		}})
+
 		<-r.dialStarted
 
 		// The attempt ends while the dial is still parked, abandoning it.
@@ -492,7 +504,10 @@ func TestFSMDialedOpenSendFailure(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		r := newFSMRig(t, FSMConfig{DialFunc: func(context.Context) (*Conn, error) {
 			client, _ := memPipe()
-			return NewConn(&writeFailConn{Conn: client, failAt: 1}), nil
+			return NewConn(&writeFailConn{
+				Conn:   client,
+				failAt: 1,
+			}), nil
 		}})
 
 		c := recv(t, r.closeC, "attempt close")
@@ -546,7 +561,10 @@ func TestFSMConfirmKeepaliveWriteFailure(t *testing.T) {
 
 			// Write 1 is the OPEN; write 2 is the confirming KEEPALIVE,
 			// and fails.
-			return NewConn(&writeFailConn{Conn: client, failAt: 2}), nil
+			return NewConn(&writeFailConn{
+				Conn:   client,
+				failAt: 2,
+			}), nil
 		}})
 
 		s := recv(t, scripts, "the FSM to dial")
@@ -598,8 +616,12 @@ func TestFSMDialedOpenSendFailureResumesRetry(t *testing.T) {
 		r := newFSMRig(t, FSMConfig{DialFunc: func(context.Context) (*Conn, error) {
 			<-release
 			client, _ := memPipe()
-			return NewConn(&writeFailConn{Conn: client, failAt: 1}), nil
+			return NewConn(&writeFailConn{
+				Conn:   client,
+				failAt: 1,
+			}), nil
 		}})
+
 		<-r.dialStarted
 
 		// An accepted connection stalls in OpenSent while the dial parks.
@@ -637,7 +659,10 @@ func TestFSMKeepaliveWriteFailure(t *testing.T) {
 
 			// Write 1 is the OPEN and write 2 the confirming KEEPALIVE;
 			// write 3 is the first keepalive tick's, and fails.
-			return NewConn(&writeFailConn{Conn: client, failAt: 3}), nil
+			return NewConn(&writeFailConn{
+				Conn:   client,
+				failAt: 3,
+			}), nil
 		}})
 
 		s := recv(t, scripts, "the FSM to dial")
@@ -674,8 +699,12 @@ func TestFSMStuckReaderAbandoned(t *testing.T) {
 		r := newFSMRig(t, FSMConfig{DialFunc: func(context.Context) (*Conn, error) {
 			client, server := memPipe()
 			scripts <- newScript(t, server)
-			return NewConn(&stuckReadConn{Conn: client, release: release}), nil
+			return NewConn(&stuckReadConn{
+				Conn:    client,
+				release: release,
+			}), nil
 		}})
+
 		s := recv(t, scripts, "the FSM to dial")
 
 		// The scripted peer never answers the OPEN, so the hold timer

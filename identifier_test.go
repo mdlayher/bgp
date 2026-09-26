@@ -12,9 +12,21 @@ func TestIdentifierParseString(t *testing.T) {
 		id Identifier
 		ok bool
 	}{
-		{s: "192.0.2.1", id: 0xc0000201, ok: true},
-		{s: "0.0.0.0", id: 0, ok: true},
-		{s: "255.255.255.255", id: 0xffffffff, ok: true},
+		{
+			s:  "192.0.2.1",
+			id: 0xc0000201,
+			ok: true,
+		},
+		{
+			s:  "0.0.0.0",
+			id: 0,
+			ok: true,
+		},
+		{
+			s:  "255.255.255.255",
+			id: 0xffffffff,
+			ok: true,
+		},
 		{s: "2001:db8::1"},
 		{s: "192.0.2"},
 		{s: "not an identifier"},

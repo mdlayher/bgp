@@ -55,9 +55,16 @@ func BenchmarkParseUpdate(b *testing.B) {
 				NewCommunity(64513, 300),
 				NewCommunity(65535, 65281),
 			},
-			LargeCommunities{{Global: 4242423610, Local1: 1, Local2: 2}},
+			LargeCommunities{{
+				Global: 4242423610,
+				Local1: 1,
+				Local2: 2,
+			}},
 			MPReachNLRI{
-				Family:    Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				},
 				NextHop:   netip.MustParseAddr("2001:db8::1"),
 				LinkLocal: netip.MustParseAddr("fe80::1"),
 				NLRI: Prefixes{
@@ -234,7 +241,12 @@ func BenchmarkPeerFullTableIngest(b *testing.B) {
 	})
 
 	s := r.acceptScript()
-	s.establish(&Open{ASN: 64497, HoldTime: 90 * time.Second, ID: MustParseIdentifier("192.0.2.2")})
+	s.establish(&Open{
+		ASN:      64497,
+		HoldTime: 90 * time.Second,
+		ID:       MustParseIdentifier("192.0.2.2"),
+	})
+
 	recv(b, r.estC, "session establishment")
 
 	b.SetBytes(int64(len(wire)))
@@ -271,10 +283,16 @@ func BenchmarkFSMFullTableIngest(b *testing.B) {
 			return nil
 		},
 	})
+
 	defer r.cancel()
 
 	s := r.nextDial()
-	s.establish(&Open{ASN: 64497, HoldTime: 90 * time.Second, ID: MustParseIdentifier("192.0.2.2")})
+	s.establish(&Open{
+		ASN:      64497,
+		HoldTime: 90 * time.Second,
+		ID:       MustParseIdentifier("192.0.2.2"),
+	})
+
 	recv(b, r.estC, "session establishment")
 
 	b.SetBytes(int64(len(wire)))

@@ -63,19 +63,18 @@ func (u *Update) EndOfRIB() (Family, bool) {
 
 	switch len(u.Attributes) {
 	case 0:
-		return Family{AFI: AFIIPv4, SAFI: SAFIUnicast}, true
+		return Family{
+			AFI:  AFIIPv4,
+			SAFI: SAFIUnicast,
+		}, true
 	case 1:
 		// The MP form carries only the family header: an AFI, a SAFI, and
 		// zero withdrawn prefixes.
-		a := u.Attributes[0]
-		if a.Type != AttrMPUnreachNLRI || len(a.Data) != 3 {
+		if u.Attributes[0].Type != AttrMPUnreachNLRI || len(u.Attributes[0].Data) != 3 {
 			return Family{}, false
 		}
 
-		return Family{
-			AFI:  AFI(binary.BigEndian.Uint16(a.Data[0:2])),
-			SAFI: SAFI(a.Data[2]),
-		}, true
+		return mpFamily(u.Attributes[0].Data), true
 	default:
 		return Family{}, false
 	}
@@ -89,7 +88,7 @@ func (u *Update) EndOfRIB() (Family, bool) {
 // The marker is meaningful without graceful restart: a speaker may send it
 // after any initial table transfer as a convergence signal.
 func NewEndOfRIB(f Family) *Update {
-	if (f == Family{AFI: AFIIPv4, SAFI: SAFIUnicast}) {
+	if f.AFI == AFIIPv4 && f.SAFI == SAFIUnicast {
 		return &Update{}
 	}
 
@@ -197,12 +196,11 @@ type UpdateDiagnostics struct {
 // parseUpdate parses the body of an UPDATE message and applies RFC 7606
 // error handling to it: a session reset is the error, anything less is in
 // the diagnostics, nil when there is nothing to report; see
-// Update.classify. addPath is the
-// session's add-path receive set, the families whose inbound NLRI entries
-// carry path identifiers (RFC 7911): the top level fields of an IPv4
-// unicast entry parse into the path fields, and the multiprotocol attribute
-// of any entry is marked so its typed parse decodes identifiers; see
-// parseMessage.
+// Update.classify. addPath is the session's add-path receive set, the
+// families whose inbound NLRI entries carry path identifiers (RFC 7911): the
+// top level fields of an IPv4 unicast entry parse into the path fields, and
+// the multiprotocol attribute of any entry is marked so its typed parse
+// decodes identifiers; see parseMessage.
 func parseUpdate(b []byte, addPath []Family) (*Update, *UpdateDiagnostics, error) {
 	if len(b) < 4 {
 		return nil, nil, badLength(len(b), "UPDATE message too short: %d byte body", len(b))
@@ -219,7 +217,11 @@ func parseUpdate(b []byte, addPath []Family) (*Update, *UpdateDiagnostics, error
 		err error
 	)
 
-	v4Paths := slices.Contains(addPath, Family{AFI: AFIIPv4, SAFI: SAFIUnicast})
+	v4Paths := slices.Contains(addPath, Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIUnicast,
+	})
+
 	if wLen > 0 {
 		u.Withdrawn, u.WithdrawnPaths, err = parseTopLevelPrefixes(b[2:2+wLen], v4Paths)
 		if err != nil {

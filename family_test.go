@@ -147,7 +147,10 @@ func TestParsePrefixesErrors(t *testing.T) {
 			t.Parallel()
 
 			_, err := parsePrefixes(tt.b, tt.afi, tt.subcode)
-			wantMessageError(t, err, NotificationUpdateMessageError, tt.subcode, nil)
+			wantMessageError(t, err, &Notification{
+				Code:    NotificationUpdateMessageError,
+				Subcode: tt.subcode,
+			})
 		})
 	}
 }

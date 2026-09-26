@@ -102,26 +102,27 @@ func TestParseUpdateErrors(t *testing.T) {
 		{
 			// RFC 7606, sections 5.3 and 7.11: a multiprotocol attribute
 			// whose next hop or NLRI does not frame leaves the routes it
-			// carries unlocatable.
+			// carries unlocatable. Here the IPv6 next hop length claims 16
+			// bytes and only 4 follow.
 			name:    "MP_REACH_NLRI next hop truncated",
-			b:       updateBody(mpReachBytes(v6Unicast(), 16, []byte{0x20, 0x01, 0x0d, 0xb8}, nil), nil),
+			b:       updateBody(attrBytes(AttrFlagOptional, AttrMPReachNLRI, 0x00, 0x02, 0x01, 16, 0x20, 0x01, 0x0d, 0xb8, 0x00), nil),
 			code:    NotificationUpdateMessageError,
 			subcode: SubcodeOptionalAttributeError,
-			data:    mpReachBytes(v6Unicast(), 16, []byte{0x20, 0x01, 0x0d, 0xb8}, nil),
+			data:    attrBytes(AttrFlagOptional, AttrMPReachNLRI, 0x00, 0x02, 0x01, 16, 0x20, 0x01, 0x0d, 0xb8, 0x00),
 		},
 		{
 			name:    "MP_REACH_NLRI prefix too long",
-			b:       updateBody(mpReachBytes(v6Unicast(), 16, make([]byte, 16), []byte{129, 0x20, 0x01}), nil),
+			b:       updateBody(mpReachBytes(v6Unicast(), make([]byte, 16), []byte{129, 0x20, 0x01}), nil),
 			code:    NotificationUpdateMessageError,
 			subcode: SubcodeOptionalAttributeError,
-			data:    mpReachBytes(v6Unicast(), 16, make([]byte, 16), []byte{129, 0x20, 0x01}),
+			data:    mpReachBytes(v6Unicast(), make([]byte, 16), []byte{129, 0x20, 0x01}),
 		},
 		{
 			name:    "MP_REACH_NLRI nonzero route distinguisher",
-			b:       updateBody(mpReachBytes(v4VPN(), 12, []byte{0, 0, 0, 1, 0, 0, 0, 0, 192, 0, 2, 1}, nil), nil),
+			b:       updateBody(mpReachBytes(v4VPN(), []byte{0, 0, 0, 1, 0, 0, 0, 0, 192, 0, 2, 1}, nil), nil),
 			code:    NotificationUpdateMessageError,
 			subcode: SubcodeOptionalAttributeError,
-			data:    mpReachBytes(v4VPN(), 12, []byte{0, 0, 0, 1, 0, 0, 0, 0, 192, 0, 2, 1}, nil),
+			data:    mpReachBytes(v4VPN(), []byte{0, 0, 0, 1, 0, 0, 0, 0, 192, 0, 2, 1}, nil),
 		},
 		{
 			name:    "MP_UNREACH_NLRI prefix truncated",
@@ -176,7 +177,11 @@ func TestParseUpdateErrors(t *testing.T) {
 				t.Fatalf("expected nil Message, but got: %v", r.Message)
 			}
 
-			wantMessageError(t, err, tt.code, tt.subcode, tt.data)
+			wantMessageError(t, err, &Notification{
+				Code:    tt.code,
+				Subcode: tt.subcode,
+				Data:    tt.data,
+			})
 		})
 	}
 }
@@ -220,15 +225,21 @@ func TestUpdateAppendBinaryErrors(t *testing.T) {
 			// wire field, so carrying both is ambiguous.
 			name: "withdrawn both forms",
 			u: &Update{
-				Withdrawn:      []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
-				WithdrawnPaths: PathPrefixes{{ID: 1, Prefix: netip.MustParsePrefix("192.0.2.0/24")}},
+				Withdrawn: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+				WithdrawnPaths: PathPrefixes{{
+					ID:     1,
+					Prefix: netip.MustParsePrefix("192.0.2.0/24"),
+				}},
 			},
 		},
 		{
 			name: "NLRI both forms",
 			u: &Update{
-				NLRI:      []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
-				NLRIPaths: PathPrefixes{{ID: 1, Prefix: netip.MustParsePrefix("192.0.2.0/24")}},
+				NLRI: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+				NLRIPaths: PathPrefixes{{
+					ID:     1,
+					Prefix: netip.MustParsePrefix("192.0.2.0/24"),
+				}},
 			},
 		},
 		{
@@ -237,7 +248,10 @@ func TestUpdateAppendBinaryErrors(t *testing.T) {
 			name: "mixed forms across fields",
 			u: &Update{
 				Withdrawn: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
-				NLRIPaths: PathPrefixes{{ID: 1, Prefix: netip.MustParsePrefix("198.51.100.0/24")}},
+				NLRIPaths: PathPrefixes{{
+					ID:     1,
+					Prefix: netip.MustParsePrefix("198.51.100.0/24"),
+				}},
 			},
 		},
 		{
@@ -276,14 +290,17 @@ func TestUpdateAppendBinaryErrors(t *testing.T) {
 func TestUpdateAddPathRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	v4u := Family{AFI: AFIIPv4, SAFI: SAFIUnicast}
-	v6u := Family{AFI: AFIIPv6, SAFI: SAFIUnicast}
-
 	// Two paths for the same prefix in each form is the extension's whole
 	// point.
 	nlri := PathPrefixes{
-		{ID: 1, Prefix: netip.MustParsePrefix("2001:db8:1::/48")},
-		{ID: 2, Prefix: netip.MustParsePrefix("2001:db8:1::/48")},
+		{
+			ID:     1,
+			Prefix: netip.MustParsePrefix("2001:db8:1::/48"),
+		},
+		{
+			ID:     2,
+			Prefix: netip.MustParsePrefix("2001:db8:1::/48"),
+		},
 	}
 
 	// The well-known mandatory attributes ride along, so the UPDATE is one
@@ -294,7 +311,7 @@ func TestUpdateAddPathRoundTrip(t *testing.T) {
 		ASPath{{ASNs: []uint32{64512}}},
 		NextHop(netip.MustParseAddr("192.0.2.1")),
 		MPReachNLRI{
-			Family:  v6u,
+			Family:  v6Unicast(),
 			NextHop: netip.MustParseAddr("2001:db8::1"),
 			NLRI:    nlri,
 		},
@@ -303,16 +320,25 @@ func TestUpdateAddPathRoundTrip(t *testing.T) {
 		t.Fatalf("failed to marshal attributes: %v", err)
 	}
 
-	// The parsed MP_REACH_NLRI is marked add-path, since v6u is in the
-	// receive set, so the want asserts the mark rather than ignoring it.
+	// The parsed MP_REACH_NLRI is marked add-path, since IPv6 unicast is in
+	// the receive set, so the want asserts the mark rather than ignoring it.
 	mp[3].addPath = true
 
 	u := &Update{
-		WithdrawnPaths: PathPrefixes{{ID: 7, Prefix: netip.MustParsePrefix("192.0.2.0/24")}},
-		Attributes:     mp,
+		WithdrawnPaths: PathPrefixes{{
+			ID:     7,
+			Prefix: netip.MustParsePrefix("192.0.2.0/24"),
+		}},
+		Attributes: mp,
 		NLRIPaths: PathPrefixes{
-			{ID: 1, Prefix: netip.MustParsePrefix("198.51.100.0/24")},
-			{ID: 2, Prefix: netip.MustParsePrefix("198.51.100.0/24")},
+			{
+				ID:     1,
+				Prefix: netip.MustParsePrefix("198.51.100.0/24"),
+			},
+			{
+				ID:     2,
+				Prefix: netip.MustParsePrefix("198.51.100.0/24"),
+			},
 		},
 	}
 
@@ -321,7 +347,7 @@ func TestUpdateAddPathRoundTrip(t *testing.T) {
 		t.Fatalf("failed to marshal UPDATE: %v", err)
 	}
 
-	r, err := ParseMessageAddPath(b, []Family{v4u, v6u})
+	r, err := ParseMessageAddPath(b, []Family{v4Unicast(), v6Unicast()})
 	if err != nil {
 		t.Fatalf("failed to parse UPDATE: %v", err)
 	}
@@ -374,9 +400,9 @@ func TestParseUpdateAddPathErrors(t *testing.T) {
 			// The MP_REACH_NLRI is marked add-path for its family, so its
 			// NLRI is checked with a path identifier before each prefix.
 			name:    "MP_REACH_NLRI path identifier truncated",
-			body:    updateBody(mpReachBytes(v4Unicast(), 4, []byte{192, 0, 2, 1}, []byte{0x00, 0x00, 0x00}), nil),
+			body:    updateBody(mpReachBytes(v4Unicast(), []byte{192, 0, 2, 1}, []byte{0x00, 0x00, 0x00}), nil),
 			subcode: SubcodeOptionalAttributeError,
-			data:    mpReachBytes(v4Unicast(), 4, []byte{192, 0, 2, 1}, []byte{0x00, 0x00, 0x00}),
+			data:    mpReachBytes(v4Unicast(), []byte{192, 0, 2, 1}, []byte{0x00, 0x00, 0x00}),
 		},
 	}
 
@@ -386,9 +412,13 @@ func TestParseUpdateAddPathErrors(t *testing.T) {
 
 			_, err := ParseMessageAddPath(
 				testMessage(MessageTypeUpdate, tt.body),
-				[]Family{{AFI: AFIIPv4, SAFI: SAFIUnicast}},
+				[]Family{v4Unicast()},
 			)
-			wantMessageError(t, err, NotificationUpdateMessageError, tt.subcode, tt.data)
+			wantMessageError(t, err, &Notification{
+				Code:    NotificationUpdateMessageError,
+				Subcode: tt.subcode,
+				Data:    tt.data,
+			})
 		})
 	}
 }
@@ -503,7 +533,7 @@ func TestParseUpdateMalformed(t *testing.T) {
 			// A family this package does not model may carry a next hop of
 			// any length and an NLRI of any shape.
 			name:  "MP_REACH_NLRI unmodeled family",
-			attrs: concat(originAttr(), asPathAttr(), mpReachBytes(nsap(), 6, []byte{1, 2, 3, 4, 5, 6}, []byte{0xff, 0xfe})),
+			attrs: concat(originAttr(), asPathAttr(), mpReachBytes(nsap(), []byte{1, 2, 3, 4, 5, 6}, []byte{0xff, 0xfe})),
 			kept:  3,
 		},
 		{
@@ -525,47 +555,67 @@ func TestParseUpdateMalformed(t *testing.T) {
 		{
 			// RFC 7606, section 3(g): the first occurrence stands and the
 			// rest are discarded, unexamined.
-			name:      "duplicate ORIGIN",
-			attrs:     concat(originAttr(), asPathAttr(), nextHopAttr(), attrBytes(AttrFlagTransitive, AttrOrigin, 0x01)),
-			nlri:      v4NLRI(),
-			discarded: RawAttributes{{Flags: AttrFlagTransitive, Type: AttrOrigin, Data: []byte{0x01}}},
-			kept:      3,
+			name:  "duplicate ORIGIN",
+			attrs: concat(originAttr(), asPathAttr(), nextHopAttr(), attrBytes(AttrFlagTransitive, AttrOrigin, 0x01)),
+			nlri:  v4NLRI(),
+			discarded: RawAttributes{{
+				Flags: AttrFlagTransitive,
+				Type:  AttrOrigin,
+				Data:  []byte{0x01},
+			}},
+			kept: 3,
 		},
 		{
 			// RFC 7606, section 7.6: ATOMIC_AGGREGATE bears on no route
 			// selection, so its malformation costs only itself.
-			name:      "ATOMIC_AGGREGATE non-empty",
-			attrs:     concat(originAttr(), asPathAttr(), nextHopAttr(), attrBytes(AttrFlagTransitive, AttrAtomicAggregate, 0x00)),
-			nlri:      v4NLRI(),
-			discarded: RawAttributes{{Flags: AttrFlagTransitive, Type: AttrAtomicAggregate, Data: []byte{0x00}}},
-			kept:      3,
+			name:  "ATOMIC_AGGREGATE non-empty",
+			attrs: concat(originAttr(), asPathAttr(), nextHopAttr(), attrBytes(AttrFlagTransitive, AttrAtomicAggregate, 0x00)),
+			nlri:  v4NLRI(),
+			discarded: RawAttributes{{
+				Flags: AttrFlagTransitive,
+				Type:  AttrAtomicAggregate,
+				Data:  []byte{0x00},
+			}},
+			kept: 3,
 		},
 		{
 			// RFC 7606, section 7.7: the two-octet AGGREGATOR of a speaker
 			// without four-octet ASNs, which this package does not accept.
-			name:      "AGGREGATOR two-octet form",
-			attrs:     concat(originAttr(), asPathAttr(), nextHopAttr(), shortAggregatorAttr()),
-			nlri:      v4NLRI(),
-			discarded: RawAttributes{{Flags: AttrFlagOptional | AttrFlagTransitive, Type: AttrAggregator, Data: shortAggregatorAttr()[3:]}},
-			kept:      3,
+			name:  "AGGREGATOR two-octet form",
+			attrs: concat(originAttr(), asPathAttr(), nextHopAttr(), shortAggregatorAttr()),
+			nlri:  v4NLRI(),
+			discarded: RawAttributes{{
+				Flags: AttrFlagOptional | AttrFlagTransitive,
+				Type:  AttrAggregator,
+				Data:  shortAggregatorAttr()[3:],
+			}},
+			kept: 3,
 		},
 		{
 			// Every attribute discarded leaves the list empty, which is
 			// nil: the same shape an UPDATE which carried none has.
-			name:      "every attribute discarded",
-			attrs:     wellKnownAggregatorAttr(),
-			discarded: RawAttributes{{Flags: AttrFlagTransitive, Type: AttrAggregator, Data: wellKnownAggregatorAttr()[3:]}},
+			name:  "every attribute discarded",
+			attrs: wellKnownAggregatorAttr(),
+			discarded: RawAttributes{{
+				Flags: AttrFlagTransitive,
+				Type:  AttrAggregator,
+				Data:  wellKnownAggregatorAttr()[3:],
+			}},
 		},
 		{
 			// RFC 7606, section 3(h): a discard and a withdraw at once are
 			// the withdraw, and the attribute is still recorded.
-			name:      "attribute discard beside treat-as-withdraw",
-			attrs:     concat(originAttr(), asPathAttr(), nextHopAttr(), attrBytes(AttrFlagTransitive, AttrAtomicAggregate, 0x00), shortMEDAttr()),
-			nlri:      v4NLRI(),
-			subcode:   SubcodeAttributeLengthError,
-			data:      shortMEDAttr(),
-			discarded: RawAttributes{{Flags: AttrFlagTransitive, Type: AttrAtomicAggregate, Data: []byte{0x00}}},
-			kept:      4,
+			name:    "attribute discard beside treat-as-withdraw",
+			attrs:   concat(originAttr(), asPathAttr(), nextHopAttr(), attrBytes(AttrFlagTransitive, AttrAtomicAggregate, 0x00), shortMEDAttr()),
+			nlri:    v4NLRI(),
+			subcode: SubcodeAttributeLengthError,
+			data:    shortMEDAttr(),
+			discarded: RawAttributes{{
+				Flags: AttrFlagTransitive,
+				Type:  AttrAtomicAggregate,
+				Data:  []byte{0x00},
+			}},
+			kept: 4,
 		},
 	}
 
@@ -589,7 +639,11 @@ func TestParseUpdateMalformed(t *testing.T) {
 					t.Fatal("no diagnostics for a treat-as-withdraw UPDATE")
 				}
 
-				wantMessageError(t, r.Diagnostics.Malformed, NotificationUpdateMessageError, tt.subcode, tt.data)
+				wantMessageError(t, r.Diagnostics.Malformed, &Notification{
+					Code:    NotificationUpdateMessageError,
+					Subcode: tt.subcode,
+					Data:    tt.data,
+				})
 			}
 
 			var discarded RawAttributes
@@ -620,9 +674,18 @@ func TestNewEndOfRIB(t *testing.T) {
 	t.Parallel()
 
 	families := []Family{
-		{AFI: AFIIPv4, SAFI: SAFIUnicast},
-		{AFI: AFIIPv6, SAFI: SAFIUnicast},
-		{AFI: AFIIPv6, SAFI: SAFIMulticast},
+		{
+			AFI:  AFIIPv4,
+			SAFI: SAFIUnicast,
+		},
+		{
+			AFI:  AFIIPv6,
+			SAFI: SAFIUnicast,
+		},
+		{
+			AFI:  AFIIPv6,
+			SAFI: SAFIMulticast,
+		},
 	}
 
 	for _, f := range families {
@@ -659,7 +722,7 @@ func TestUpdateEndOfRIB(t *testing.T) {
 		{
 			name:   "IPv4 unicast",
 			u:      &Update{},
-			family: Family{AFI: AFIIPv4, SAFI: SAFIUnicast},
+			family: v4Unicast(),
 			ok:     true,
 		},
 		{
@@ -669,7 +732,7 @@ func TestUpdateEndOfRIB(t *testing.T) {
 				Type:  AttrMPUnreachNLRI,
 				Data:  []byte{0x00, 0x02, 0x01},
 			}}},
-			family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+			family: v6Unicast(),
 			ok:     true,
 		},
 		{
@@ -677,7 +740,10 @@ func TestUpdateEndOfRIB(t *testing.T) {
 			// when the path fields are empty too.
 			name: "path fields carry content",
 			u: &Update{NLRIPaths: PathPrefixes{
-				{ID: 1, Prefix: netip.MustParsePrefix("192.0.2.0/24")},
+				{
+					ID:     1,
+					Prefix: netip.MustParsePrefix("192.0.2.0/24"),
+				},
 			}},
 		},
 		{
@@ -817,7 +883,7 @@ func partialAggregatorAttr() []byte {
 
 func mpReachAttr() []byte {
 	data, err := MPReachNLRI{
-		Family:  Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+		Family:  v6Unicast(),
 		NextHop: netip.MustParseAddr("2001:db8::1"),
 		NLRI:    Prefixes{netip.MustParsePrefix("2001:db8:1::/48")},
 	}.appendData(nil)
@@ -831,17 +897,39 @@ func mpReachAttr() []byte {
 // The families hand-built multiprotocol attributes use. nsap is one this
 // package does not model and never will: CLNP over BGP, whose next hop is
 // an NSAP address rather than an IP one.
-func v4Unicast() Family { return Family{AFI: AFIIPv4, SAFI: SAFIUnicast} }
-func v6Unicast() Family { return Family{AFI: AFIIPv6, SAFI: SAFIUnicast} }
-func v4VPN() Family     { return Family{AFI: AFIIPv4, SAFI: SAFIMPLSVPN} }
-func nsap() Family      { return Family{AFI: AFI(3), SAFI: SAFIUnicast} }
+func v4Unicast() Family {
+	return Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIUnicast,
+	}
+}
 
-// mpReachBytes is a hand-built MP_REACH_NLRI attribute: the family, a next
-// hop length field of n, the next hop bytes as given, whether or not they
-// match n, one reserved byte, and the NLRI bytes.
-func mpReachBytes(f Family, n int, nextHop, nlri []byte) []byte {
+func v6Unicast() Family {
+	return Family{
+		AFI:  AFIIPv6,
+		SAFI: SAFIUnicast,
+	}
+}
+
+func v4VPN() Family {
+	return Family{
+		AFI:  AFIIPv4,
+		SAFI: SAFIMPLSVPN,
+	}
+}
+
+func nsap() Family {
+	return Family{
+		AFI:  AFI(3),
+		SAFI: SAFIUnicast,
+	}
+}
+
+// mpReachBytes is a hand-built MP_REACH_NLRI attribute: the family, the next
+// hop length and bytes, one reserved byte, and the NLRI bytes.
+func mpReachBytes(f Family, nextHop, nlri []byte) []byte {
 	data := binary.BigEndian.AppendUint16(nil, uint16(f.AFI))
-	data = append(data, byte(f.SAFI), byte(n))
+	data = append(data, byte(f.SAFI), byte(len(nextHop)))
 	data = append(data, nextHop...)
 	data = append(data, 0x00)
 	return attrBytes(AttrFlagOptional, AttrMPReachNLRI, append(data, nlri...)...)

@@ -26,12 +26,12 @@ func buildOpen(id Identity, restarting bool) (*Open, error) {
 		caps = append(caps, Capability{Code: CapabilityEnhancedRouteRefresh})
 	}
 
-	if g := id.GracefulRestart; g != nil {
+	if id.GracefulRestart != nil {
 		gc, err := GracefulRestartCapability(GracefulRestart{
 			Restarting:          restarting,
-			NotificationSupport: g.NotificationSupport,
-			RestartTime:         g.RestartTime,
-			Families:            g.Families,
+			NotificationSupport: id.GracefulRestart.NotificationSupport,
+			RestartTime:         id.GracefulRestart.RestartTime,
+			Families:            id.GracefulRestart.Families,
 		})
 		if err != nil {
 			return nil, err
@@ -40,8 +40,8 @@ func buildOpen(id Identity, restarting bool) (*Open, error) {
 		caps = append(caps, gc)
 	}
 
-	if l := id.LongLivedGracefulRestart; l != nil {
-		lc, err := LongLivedGracefulRestartCapability(*l)
+	if id.LongLivedGracefulRestart != nil {
+		lc, err := LongLivedGracefulRestartCapability(*id.LongLivedGracefulRestart)
 		if err != nil {
 			return nil, err
 		}
@@ -104,6 +104,7 @@ func (f *FSM) negotiate(local, o *Open) (Session, *MessageError) {
 			Code: CapabilityFourOctetAS,
 			Data: binary.BigEndian.AppendUint32(nil, f.cfg.LocalASN),
 		})
+
 		return Session{}, openError(SubcodeUnsupportedCapability, data,
 			"peer does not support four-octet AS numbers")
 	}
@@ -128,10 +129,10 @@ func (f *FSM) negotiate(local, o *Open) (Session, *MessageError) {
 	}
 
 	// RFC 6286, section 2.2: a BGP identifier need only be unique within an
-	// AS, so an internal peer — one in this speaker's own AS — bearing this
-	// speaker's identifier is a duplicate inside the AS, or this speaker
-	// reaching itself. Externally, equal identifiers are legal, and collision
-	// resolution breaks the tie on ASN; see dialedSurvives.
+	// AS. An internal peer, in this speaker's own AS, which bears this
+	// speaker's identifier is therefore a duplicate inside the AS, or this
+	// speaker reaching itself. Externally, equal identifiers are legal, and
+	// collision resolution breaks the tie on ASN; see dialedSurvives.
 	if o.ASN == f.cfg.LocalASN && o.ID == f.cfg.LocalID {
 		return Session{}, openError(SubcodeBadBGPIdentifier, nil,
 			"internal peer OPEN carries the local BGP identifier")
@@ -218,6 +219,7 @@ func negotiatedAddPath(ours []AddPathFamily, fams []Family, caps []Capability) [
 			Send:    l.Send && p.Receive,
 			Receive: l.Receive && p.Send,
 		}
+
 		if af.Send || af.Receive {
 			out = append(out, af)
 		}
@@ -263,19 +265,19 @@ func longLivedGracefulRestart(caps []Capability) *LongLivedGracefulRestart {
 	return nil
 }
 
-// dialedSurvives resolves a connection collision: it reports whether the
-// locally initiated connection survives, per RFC 4271, section 6.8 and RFC
-// 6286, section 2.3.
+// dialedSurvives resolves a connection collision between the identities
+// in the local and peer OPENs: it reports whether the locally initiated
+// connection survives, per RFC 4271, section 6.8 and RFC 6286, section 2.3.
 //
 // A full tie cannot occur: negotiate rejects an internal peer bearing the
 // local identifier (RFC 6286, section 2.2), and the identities compared here
 // are the negotiated ones.
-func dialedSurvives(localID, peerID Identifier, localASN, peerASN uint32) bool {
-	if localID != peerID {
-		return localID > peerID
+func dialedSurvives(local, peer *Open) bool {
+	if local.ID != peer.ID {
+		return local.ID > peer.ID
 	}
 
-	return localASN > peerASN
+	return local.ASN > peer.ASN
 }
 
 // negotiatedFamilies intersects the local family set with the peer's

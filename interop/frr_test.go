@@ -8,9 +8,11 @@ import (
 	"net"
 	"net/netip"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/mdlayher/bgp"
 )
 
@@ -37,8 +39,15 @@ var (
 	hostAddr4 = netip.MustParseAddr(hostV4)
 	hostAddr6 = netip.MustParseAddr(hostV6)
 
-	v4Unicast = bgp.Family{AFI: bgp.AFIIPv4, SAFI: bgp.SAFIUnicast}
-	v6Unicast = bgp.Family{AFI: bgp.AFIIPv6, SAFI: bgp.SAFIUnicast}
+	v4Unicast = bgp.Family{
+		AFI:  bgp.AFIIPv4,
+		SAFI: bgp.SAFIUnicast,
+	}
+
+	v6Unicast = bgp.Family{
+		AFI:  bgp.AFIIPv6,
+		SAFI: bgp.SAFIUnicast,
+	}
 
 	// families is what both speakers advertise in every scenario 1
 	// variant: the FRR template always activates both address
@@ -50,52 +59,99 @@ var (
 // Scenario 1: session establishment and capability negotiation, in
 // both roles plus the iBGP and four-octet ASN variants.
 
-func TestFRREstablishActive(t *testing.T)    { testFRREstablish(t, libASN, frrASN, false) }
-func TestFRREstablishPassive(t *testing.T)   { testFRREstablish(t, libASN, frrASN, true) }
-func TestFRREstablishIBGP(t *testing.T)      { testFRREstablish(t, libASN, libASN, false) }
-func TestFRREstablishFourOctet(t *testing.T) { testFRREstablish(t, libASN4, frrASN4, false) }
+func TestFRREstablishActive(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
+	testFRREstablish(t, establishCase{
+		local:  libASN,
+		remote: frrASN,
+	})
+}
+
+func TestFRREstablishPassive(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
+	testFRREstablish(t, establishCase{
+		local:   libASN,
+		remote:  frrASN,
+		passive: true,
+	})
+}
+
+func TestFRREstablishIBGP(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
+	testFRREstablish(t, establishCase{
+		local:  libASN,
+		remote: libASN,
+	})
+}
+
+func TestFRREstablishFourOctet(t *testing.T) {
+	// Not parallel: the harness hosts one FRR instance at a time, on
+	// fixed addresses and interface names.
+
+	testFRREstablish(t, establishCase{
+		local:  libASN4,
+		remote: frrASN4,
+	})
+}
+
+// An establishCase parameterizes testFRREstablish: the library
+// speaker is AS local and FRR is AS remote. passive makes the library
+// accept FRR's dial via a Server listener on an ephemeral port rather
+// than dial FRR's port 179.
+type establishCase struct {
+	local, remote uint32
+	passive       bool
+}
 
 // testFRREstablish establishes a session between a library speaker
-// (AS local) and FRR (AS remote), the library either dialing FRR's
-// port 179 (active) or accepting FRR's dial via a Server listener on
-// an ephemeral port (passive), then asserts both speakers' views of
-// the negotiation.
-func testFRREstablish(t *testing.T, local, remote uint32, passive bool) {
+// and FRR in the role c describes, then asserts both speakers' views
+// of the negotiation.
+func testFRREstablish(t *testing.T, c establishCase) {
 	cfg := bgp.PeerConfig{
-		LocalASN: local,
+		LocalASN: c.local,
 		LocalID:  libID,
-		PeerASN:  remote,
+		PeerASN:  c.remote,
 		Families: families,
 	}
 
-	// Both roles produce sessions between FRR's address and the
-	// host's own address on the bridge (its gateway).
-	host := hostAddr4
-
+	// Both roles produce sessions between FRR's address and
+	// hostAddr4, the host's own address on the bridge: its gateway.
 	var (
 		estab <-chan bgp.Session
 		f     *frr
 	)
 
-	if passive {
+	if c.passive {
 		cfg.Passive = true
 
 		// The Server must be listening before FRR boots so FRR's
 		// first connect attempt lands, and its ephemeral port is
 		// only known once it is.
 		var port uint16
-		raddr := netip.AddrPortFrom(netip.MustParseAddr(frrV4), 0)
-		_, estab, port = runServer(t, raddr, cfg, bgp.ListenConfig{})
+		_, estab, port = runServer(t, cfg, bgp.ListenConfig{})
 		f = startFRR(t, frrConfig{
-			ASN:       remote,
-			RouterID:  frrRouterID,
-			Neighbors: []frrNeighbor{{Addr: host, ASN: local, Port: port}},
+			ASN:      c.remote,
+			RouterID: frrRouterID,
+			Neighbors: []frrNeighbor{{
+				Addr: hostAddr4,
+				ASN:  c.local,
+				Port: port,
+			}},
 		})
 	} else {
 		f = startFRR(t, frrConfig{
-			ASN:       remote,
-			RouterID:  frrRouterID,
-			Neighbors: []frrNeighbor{{Addr: host, ASN: local}},
+			ASN:      c.remote,
+			RouterID: frrRouterID,
+			Neighbors: []frrNeighbor{{
+				Addr: hostAddr4,
+				ASN:  c.local,
+			}},
 		})
 
 		_, estab = runPeer(t, netip.AddrPortFrom(f.Addr, bgp.Port), cfg)
@@ -104,7 +160,7 @@ func testFRREstablish(t *testing.T, local, remote uint32, passive bool) {
 	s := awaitSession(t, estab)
 
 	// Our view of FRR.
-	if got, want := s.Peer.ASN, remote; got != want {
+	if got, want := s.Peer.ASN, c.remote; got != want {
 		t.Errorf("unexpected peer ASN: got %d, want %d", got, want)
 	}
 
@@ -112,23 +168,22 @@ func testFRREstablish(t *testing.T, local, remote uint32, passive bool) {
 		t.Errorf("unexpected peer identifier: got %s, want %s", got, want)
 	}
 
-	// FRR proposes 9 seconds (timers bgp 3 9), we propose the 90
+	// FRR proposes 9 seconds with timers bgp 3 9, we propose the 90
 	// second default, and negotiation takes the minimum.
 	if got, want := s.HoldTime, 9*time.Second; got != want {
 		t.Errorf("unexpected negotiated hold time: got %s, want %s", got, want)
 	}
 
-	if got, want := s.Families, families; !slices.Equal(got, want) {
-		t.Errorf("unexpected negotiated families: got %v, want %v", got, want)
+	if d := diff(t, families, s.Families); d != "" {
+		t.Errorf("unexpected negotiated families (-want +got):\n%s", d)
 	}
 
 	// FRR advertises its FQDN capability by default, carrying the
-	// instance's pinned kernel hostname (see frrHostname): decoding
-	// it exercises the codec against a real implementation.
+	// instance's pinned kernel hostname, frrHostname. Decoding it
+	// exercises the codec against a real implementation.
 	// Unknown-capability tolerance is still exercised for free by
-	// the other capabilities FRR sends (extended message, enhanced
-	// route refresh, paths limit, ...) which this package does not
-	// model.
+	// the other capabilities FRR sends which this package does not
+	// model, such as extended message and paths limit.
 	fi := slices.IndexFunc(s.Peer.Capabilities, func(c bgp.Capability) bool { return c.Code == bgp.CapabilityFQDN })
 	if fi < 0 {
 		t.Errorf("FRR's OPEN did not carry its default FQDN capability: %v", s.Peer.Capabilities)
@@ -140,12 +195,12 @@ func testFRREstablish(t *testing.T, local, remote uint32, passive bool) {
 
 	// FRR's view of us. Our side is established, but poll FRR's view
 	// anyway: its state machine is not synchronized with ours.
-	n := f.awaitEstablished(t, host)
-	if got, want := n.RemoteASN, local; got != want {
+	n := f.awaitEstablished(t, hostAddr4)
+	if got, want := n.RemoteASN, c.local; got != want {
 		t.Errorf("FRR reports unexpected remote ASN: got %d, want %d", got, want)
 	}
 
-	if got, want := n.LocalASN, remote; got != want {
+	if got, want := n.LocalASN, c.remote; got != want {
 		t.Errorf("FRR reports unexpected local ASN: got %d, want %d", got, want)
 	}
 
@@ -166,8 +221,8 @@ func testFRREstablish(t *testing.T, local, remote uint32, passive bool) {
 
 // runPeer constructs a Peer for the router at raddr from cfg and runs it on
 // a test-scoped goroutine, returning the Peer and a channel which delivers
-// each established Session. Teardown (an Administrative Shutdown toward
-// the router) happens when t ends.
+// each established Session. Teardown, an Administrative Shutdown toward
+// the router, happens when t ends.
 func runPeer(t *testing.T, raddr netip.AddrPort, cfg bgp.PeerConfig) (*bgp.Peer, <-chan bgp.Session) {
 	t.Helper()
 
@@ -218,16 +273,16 @@ func runPeerCause(t *testing.T, raddr netip.AddrPort, cfg bgp.PeerConfig) (*bgp.
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
+	var wg sync.WaitGroup
+	wg.Go(func() {
 		if err := p.Run(ctx); !errors.Is(err, context.Canceled) {
 			t.Logf("peer run: %v", err)
 		}
-	}()
+	})
+
 	t.Cleanup(func() {
 		cancel(nil)
-		<-done
+		wg.Wait()
 	})
 
 	return p, estab, cancel
@@ -238,10 +293,10 @@ func runPeerCause(t *testing.T, raddr netip.AddrPort, cfg bgp.PeerConfig) (*bgp.
 var wildcardV4 = netip.MustParseAddrPort("0.0.0.0:0")
 
 // runServer runs a Server with a single listener bound by lc and cfg as
-// its sole (passive) peer for the router at raddr, returning the Server,
-// the established Session channel, and the bound port for the router's
-// `neighbor ... port` statement.
-func runServer(t *testing.T, raddr netip.AddrPort, cfg bgp.PeerConfig, lc bgp.ListenConfig) (*bgp.Server, <-chan bgp.Session, uint16) {
+// its sole peer, a passive one for the FRR instance at frrV4. It
+// returns the Server, the established Session channel, and the bound
+// port for the router's `neighbor ... port` statement.
+func runServer(t *testing.T, cfg bgp.PeerConfig, lc bgp.ListenConfig) (*bgp.Server, <-chan bgp.Session, uint16) {
 	t.Helper()
 
 	estab := make(chan bgp.Session, 1)
@@ -280,7 +335,7 @@ func runServer(t *testing.T, raddr netip.AddrPort, cfg bgp.PeerConfig, lc bgp.Li
 	port := l.Addr().(*net.TCPAddr).AddrPort().Port()
 
 	srv := bgp.NewServer(bgp.ServerConfig{})
-	if _, err := srv.AddPeer(raddr.Addr(), cfg); err != nil {
+	if _, err := srv.AddPeer(netip.MustParseAddr(frrV4), cfg); err != nil {
 		_ = l.Close()
 		t.Fatalf("failed to add peer: %v", err)
 	}
@@ -288,17 +343,36 @@ func runServer(t *testing.T, raddr netip.AddrPort, cfg bgp.PeerConfig, lc bgp.Li
 	// The router is started after this returns, so its SYN always finds
 	// the peering's key installed by Run.
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
+	var wg sync.WaitGroup
+	wg.Go(func() {
 		if err := srv.Run(ctx, l); !errors.Is(err, context.Canceled) {
 			t.Logf("server run: %v", err)
 		}
-	}()
+	})
+
 	t.Cleanup(func() {
 		cancel()
-		<-done
+		wg.Wait()
 	})
 
 	return srv, estab, port
+}
+
+// diff compares two values of the same static type, returning a non-empty,
+// human readable description of the difference when the values are not
+// equal. Comparisons handle the netip types, and treat nil and empty byte
+// slices as equivalent, since the wire format cannot distinguish them.
+func diff[T any](tb testing.TB, want, got T) string {
+	tb.Helper()
+
+	return cmp.Diff(
+		want, got,
+		cmp.Comparer(func(x, y netip.Addr) bool { return x == y }),
+		cmp.Comparer(func(x, y netip.Prefix) bool { return x == y }),
+		cmp.Comparer(func(x, y bgp.NextHop) bool { return netip.Addr(x) == netip.Addr(y) }),
+		cmp.FilterValues(
+			func(x, y []byte) bool { return len(x) == 0 && len(y) == 0 },
+			cmp.Comparer(func(_, _ []byte) bool { return true }),
+		),
+	)
 }

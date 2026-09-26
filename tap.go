@@ -48,8 +48,8 @@ type MessageEvent struct {
 	// may have crossed the wire.
 	Raw []byte
 
-	// Message is the parsed (received) or written (sent) message, or nil
-	// when a received frame could not be parsed.
+	// Message is the message parsed from a received frame or written for a
+	// sent one. It is nil when a received frame could not be parsed.
 	Message Message
 
 	// Err is nil for a message which parsed or wrote cleanly. On a

@@ -81,10 +81,10 @@ func TestPeerRetryAfterClose(t *testing.T) {
 	})
 }
 
-// TestPeerDialRetry verifies the connect retry cadence of RFC 4271, section
-// 8.2.2: the retry timer is armed when a dial begins, a failed dial waits
-// out the remainder of the interval, and the timer's expiry starts the next
-// dial — even while an unrelated inbound connection is mid-exchange.
+// The TestPeerDialRetry tests verify the connect retry cadence of RFC 4271,
+// section 8.2.2: the retry timer is armed when a dial begins, a failed dial
+// waits out the remainder of the interval, and the timer's expiry starts the
+// next dial, even while an unrelated inbound connection is mid-exchange.
 func TestPeerDialRetryRefused(t *testing.T) {
 	t.Parallel()
 
@@ -122,7 +122,7 @@ func TestPeerDialRetryStalledInbound(t *testing.T) {
 // verify that losing the dialed connection mid-attempt resumes the active
 // open's cadence: a successful dial stops the connect retry timer, and
 // without a re-arm on the dialed connection's death the attempt would ride
-// the accepted connection alone — a peer stalled in OpenSent could then
+// the accepted connection alone. A peer stalled in OpenSent could then
 // suppress this speaker's active open for the rest of the attempt, up to a
 // full openHoldTime.
 func TestPeerDialedDeathResumesRetry(t *testing.T) {
@@ -323,9 +323,17 @@ func TestPeerDialFuncIgnoresCancellation(t *testing.T) {
 		},
 	}))
 
+	// Cleanups run last in, first out: Run is canceled and joined before
+	// the release above unparks the abandoned dial.
+	var wg sync.WaitGroup
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		wg.Wait()
+	})
+
 	runC := make(chan error, 1)
-	go func() { runC <- p.Run(ctx) }()
+	wg.Go(func() { runC <- p.Run(ctx) })
 
 	recv(t, dialing, "the DialFunc to be entered")
 	cancel()
@@ -501,7 +509,7 @@ func TestPeerConnectRetryStoppedWhileDialed(t *testing.T) {
 		dialed.expectOpen()
 
 		// Nearly the whole open hold time passes with the peer stalled in
-		// OpenSent — almost two retry intervals: a stopped timer cannot
+		// OpenSent, almost two retry intervals. A stopped timer cannot
 		// fire, so no dial begins. Wait settles the bubble, so a dial the
 		// ticks had started would already be on the channel.
 		time.Sleep(openHoldTime - time.Second)
@@ -524,7 +532,10 @@ func TestPeerConnectRetryStoppedWhileDialed(t *testing.T) {
 		accepted := r.deliver()
 		accepted.expectOpen()
 
-		dialed.write(&Notification{Code: NotificationCease, Subcode: SubcodeCeaseAdministrativeReset})
+		dialed.write(&Notification{
+			Code:    NotificationCease,
+			Subcode: SubcodeCeaseAdministrativeReset,
+		})
 		dialed.expectClosed()
 		synctest.Wait()
 
@@ -547,8 +558,9 @@ func TestPeerHooksRefuseReentry(t *testing.T) {
 
 		reenter := func(hook string, p *Peer) {
 			mu.Lock()
-			defer mu.Unlock()
 			visited[hook] = true
+			mu.Unlock()
+
 			if err := p.Run(context.Background()); err == nil {
 				t.Errorf("Run from %s: expected an error, but none occurred", hook)
 			}

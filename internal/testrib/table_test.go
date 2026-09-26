@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,8 +15,15 @@ import (
 )
 
 var (
-	v4u = bgp.Family{AFI: bgp.AFIIPv4, SAFI: bgp.SAFIUnicast}
-	v6u = bgp.Family{AFI: bgp.AFIIPv6, SAFI: bgp.SAFIUnicast}
+	v4u = bgp.Family{
+		AFI:  bgp.AFIIPv4,
+		SAFI: bgp.SAFIUnicast,
+	}
+
+	v6u = bgp.Family{
+		AFI:  bgp.AFIIPv6,
+		SAFI: bgp.SAFIUnicast,
+	}
 )
 
 func TestNewErrors(t *testing.T) {
@@ -182,8 +190,11 @@ func TestTableOnUpdate(t *testing.T) {
 
 	// Withdraw one prefix per family, both ways.
 	if err := tb.OnUpdate(ctx, p, &bgp.Update{
-		Withdrawn:  []netip.Prefix{pB},
-		Attributes: attrs(t, bgp.MPUnreachNLRI{Family: v6u, NLRI: bgp.Prefixes{p6}}),
+		Withdrawn: []netip.Prefix{pB},
+		Attributes: attrs(t, bgp.MPUnreachNLRI{
+			Family: v6u,
+			NLRI:   bgp.Prefixes{p6},
+		}),
 	}, nil); err != nil {
 		t.Fatalf("failed to apply withdrawal: %v", err)
 	}
@@ -275,18 +286,27 @@ func TestTableRetention(t *testing.T) {
 		gr = &bgp.GracefulRestart{
 			NotificationSupport: true,
 			RestartTime:         60 * time.Second,
-			Families:            []bgp.GracefulRestartFamily{{Family: v4u, ForwardingPreserved: true}},
+			Families: []bgp.GracefulRestartFamily{{
+				Family:              v4u,
+				ForwardingPreserved: true,
+			}},
 		}
 
 		grNoN = &bgp.GracefulRestart{
 			RestartTime: 60 * time.Second,
-			Families:    []bgp.GracefulRestartFamily{{Family: v4u, ForwardingPreserved: true}},
+			Families: []bgp.GracefulRestartFamily{{
+				Family:              v4u,
+				ForwardingPreserved: true,
+			}},
 		}
 
 		grV6Only = &bgp.GracefulRestart{
 			NotificationSupport: true,
 			RestartTime:         60 * time.Second,
-			Families:            []bgp.GracefulRestartFamily{{Family: v6u, ForwardingPreserved: true}},
+			Families: []bgp.GracefulRestartFamily{{
+				Family:              v6u,
+				ForwardingPreserved: true,
+			}},
 		}
 
 		shutdown = &bgp.Notification{
@@ -308,51 +328,82 @@ func TestTableRetention(t *testing.T) {
 		retain bool
 	}{
 		{
-			name:   "transport death retains",
-			gr:     gr,
-			close:  bgp.Close{Err: net.ErrClosed, Established: true},
+			name: "transport death retains",
+			gr:   gr,
+			close: bgp.Close{
+				Err:         net.ErrClosed,
+				Established: true,
+			},
 			retain: true,
 		},
 		{
-			name:  "no capability flushes",
-			close: bgp.Close{Err: net.ErrClosed, Established: true},
+			name: "no capability flushes",
+			close: bgp.Close{
+				Err:         net.ErrClosed,
+				Established: true,
+			},
 		},
 		{
 			name: "zero restart time flushes",
 			gr: &bgp.GracefulRestart{
 				NotificationSupport: true,
-				Families:            []bgp.GracefulRestartFamily{{Family: v4u, ForwardingPreserved: true}},
+				Families: []bgp.GracefulRestartFamily{{
+					Family:              v4u,
+					ForwardingPreserved: true,
+				}},
 			},
-			close: bgp.Close{Err: net.ErrClosed, Established: true},
+			close: bgp.Close{
+				Err:         net.ErrClosed,
+				Established: true,
+			},
 		},
 		{
-			name:   "notification with both N bits retains",
-			gr:     gr,
-			notif:  true,
-			close:  bgp.Close{Notification: shutdown, Local: false, Established: true},
+			name:  "notification with both N bits retains",
+			gr:    gr,
+			notif: true,
+			close: bgp.Close{
+				Notification: shutdown,
+				Local:        false,
+				Established:  true,
+			},
 			retain: true,
 		},
 		{
 			name:  "notification without peer N bit flushes",
 			gr:    grNoN,
 			notif: true,
-			close: bgp.Close{Notification: shutdown, Local: false, Established: true},
+			close: bgp.Close{
+				Notification: shutdown,
+				Local:        false,
+				Established:  true,
+			},
 		},
 		{
-			name:  "notification without local N bit flushes",
-			gr:    gr,
-			close: bgp.Close{Notification: shutdown, Local: false, Established: true},
+			name: "notification without local N bit flushes",
+			gr:   gr,
+			close: bgp.Close{
+				Notification: shutdown,
+				Local:        false,
+				Established:  true,
+			},
 		},
 		{
 			name:  "hard reset flushes",
 			gr:    gr,
 			notif: true,
-			close: bgp.Close{Notification: hardReset, Local: false, Established: true},
+			close: bgp.Close{
+				Notification: hardReset,
+				Local:        false,
+				Established:  true,
+			},
 		},
 		{
-			name:   "family absent from capability flushes",
-			gr:     grV6Only,
-			close:  bgp.Close{Err: net.ErrClosed, Established: true},
+			name: "family absent from capability flushes",
+			gr:   grV6Only,
+			close: bgp.Close{
+				Err:         net.ErrClosed,
+				Established: true,
+			},
 			retain: false,
 		},
 	}
@@ -402,7 +453,10 @@ func TestTableEndOfRIBSweep(t *testing.T) {
 	gr := &bgp.GracefulRestart{
 		NotificationSupport: true,
 		RestartTime:         60 * time.Second,
-		Families:            []bgp.GracefulRestartFamily{{Family: v4u, ForwardingPreserved: true}},
+		Families: []bgp.GracefulRestartFamily{{
+			Family:              v4u,
+			ForwardingPreserved: true,
+		}},
 	}
 
 	if err := tb.OnEstablished(ctx, p, session(true, gr, v4u)); err != nil {
@@ -411,7 +465,10 @@ func TestTableEndOfRIBSweep(t *testing.T) {
 
 	announce(t, tb, p, pA.String())
 	announce(t, tb, p, pB.String())
-	tb.OnClose(p, bgp.Close{Err: net.ErrClosed, Established: true})
+	tb.OnClose(p, bgp.Close{
+		Err:         net.ErrClosed,
+		Established: true,
+	})
 
 	for _, r := range tb.Routes(p, v4u) {
 		if !r.Stale {
@@ -455,7 +512,10 @@ func TestTableForwardingNotPreserved(t *testing.T) {
 	gr := &bgp.GracefulRestart{
 		NotificationSupport: true,
 		RestartTime:         60 * time.Second,
-		Families:            []bgp.GracefulRestartFamily{{Family: v4u, ForwardingPreserved: true}},
+		Families: []bgp.GracefulRestartFamily{{
+			Family:              v4u,
+			ForwardingPreserved: true,
+		}},
 	}
 
 	tests := []struct {
@@ -497,7 +557,10 @@ func TestTableForwardingNotPreserved(t *testing.T) {
 			}
 
 			announce(t, tb, p, "198.51.100.0/24")
-			tb.OnClose(p, bgp.Close{Err: net.ErrClosed, Established: true})
+			tb.OnClose(p, bgp.Close{
+				Err:         net.ErrClosed,
+				Established: true,
+			})
 
 			// A new session which no longer preserves the family flushes
 			// its stale routes immediately, not at End-of-RIB.
@@ -525,7 +588,10 @@ func TestTableRestartTimerExpiry(t *testing.T) {
 	gr := &bgp.GracefulRestart{
 		NotificationSupport: true,
 		RestartTime:         45 * time.Second,
-		Families:            []bgp.GracefulRestartFamily{{Family: v4u, ForwardingPreserved: true}},
+		Families: []bgp.GracefulRestartFamily{{
+			Family:              v4u,
+			ForwardingPreserved: true,
+		}},
 	}
 
 	if err := tb.OnEstablished(ctx, p, session(true, gr, v4u)); err != nil {
@@ -533,7 +599,10 @@ func TestTableRestartTimerExpiry(t *testing.T) {
 	}
 
 	announce(t, tb, p, "198.51.100.0/24")
-	tb.OnClose(p, bgp.Close{Err: net.ErrClosed, Established: true})
+	tb.OnClose(p, bgp.Close{
+		Err:         net.ErrClosed,
+		Established: true,
+	})
 
 	if fs.d != gr.RestartTime {
 		t.Fatalf("unexpected sweep delay: got %v, want %v", fs.d, gr.RestartTime)
@@ -541,6 +610,7 @@ func TestTableRestartTimerExpiry(t *testing.T) {
 
 	// The peer never returns: expiry flushes everything it left behind.
 	fs.fire()
+
 	if rs := tb.Routes(p, v4u); len(rs) != 0 {
 		t.Fatalf("expected no routes after restart time expiry, but got: %v", rs)
 	}
@@ -559,7 +629,10 @@ func TestTableRestartTimerLateFire(t *testing.T) {
 	gr := &bgp.GracefulRestart{
 		NotificationSupport: true,
 		RestartTime:         45 * time.Second,
-		Families:            []bgp.GracefulRestartFamily{{Family: v4u, ForwardingPreserved: true}},
+		Families: []bgp.GracefulRestartFamily{{
+			Family:              v4u,
+			ForwardingPreserved: true,
+		}},
 	}
 
 	if err := tb.OnEstablished(ctx, p, session(true, gr, v4u)); err != nil {
@@ -567,7 +640,10 @@ func TestTableRestartTimerLateFire(t *testing.T) {
 	}
 
 	announce(t, tb, p, "198.51.100.0/24")
-	tb.OnClose(p, bgp.Close{Err: net.ErrClosed, Established: true})
+	tb.OnClose(p, bgp.Close{
+		Err:         net.ErrClosed,
+		Established: true,
+	})
 
 	// The peer returns, and the sweep callback fires anyway: time.AfterFunc's
 	// Stop cannot un-run a callback already in flight, so the generation
@@ -594,12 +670,18 @@ func TestTableAttemptCloseIgnored(t *testing.T) {
 	)
 
 	// A close for a peer with no state at all must not panic.
-	tb.OnClose(testPeer(t), bgp.Close{Err: net.ErrClosed, Established: true})
+	tb.OnClose(testPeer(t), bgp.Close{
+		Err:         net.ErrClosed,
+		Established: true,
+	})
 
 	gr := &bgp.GracefulRestart{
 		NotificationSupport: true,
 		RestartTime:         45 * time.Second,
-		Families:            []bgp.GracefulRestartFamily{{Family: v4u, ForwardingPreserved: true}},
+		Families: []bgp.GracefulRestartFamily{{
+			Family:              v4u,
+			ForwardingPreserved: true,
+		}},
 	}
 
 	if err := tb.OnEstablished(ctx, p, session(true, gr, v4u)); err != nil {
@@ -607,7 +689,10 @@ func TestTableAttemptCloseIgnored(t *testing.T) {
 	}
 
 	announce(t, tb, p, "198.51.100.0/24")
-	tb.OnClose(p, bgp.Close{Err: net.ErrClosed, Established: true})
+	tb.OnClose(p, bgp.Close{
+		Err:         net.ErrClosed,
+		Established: true,
+	})
 
 	// A failed attempt between sessions reports OnClose with Established
 	// false: retention and the armed sweep must survive it.
@@ -628,6 +713,7 @@ func TestTableAttemptCloseIgnored(t *testing.T) {
 // graceful restart with retention, and the sweep at End-of-RIB.
 func TestTablePeersTCP(t *testing.T) {
 	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("skipping, test uses real TCP connections and timers")
 	}
@@ -640,8 +726,15 @@ func TestTablePeersTCP(t *testing.T) {
 	gr := &bgp.GracefulRestartConfig{
 		RestartTime:         30 * time.Second,
 		NotificationSupport: true,
-		Families:            []bgp.GracefulRestartFamily{{Family: v4u, ForwardingPreserved: true}},
+		Families: []bgp.GracefulRestartFamily{{
+			Family:              v4u,
+			ForwardingPreserved: true,
+		}},
 	}
+
+	// changed signals every change to either table, so each phase waits on
+	// the next change rather than polling.
+	changed := make(changes, 1)
 
 	tableA := newTable(t, testrib.Config{
 		Local: map[bgp.Family][]*bgp.Update{v4u: {{
@@ -654,6 +747,7 @@ func TestTablePeersTCP(t *testing.T) {
 			),
 		}}},
 	})
+
 	tableB := newTable(t, testrib.Config{
 		Local: map[bgp.Family][]*bgp.Update{v4u: {{
 			NLRI: []netip.Prefix{pB},
@@ -674,35 +768,35 @@ func TestTablePeersTCP(t *testing.T) {
 
 	t.Cleanup(func() { _ = ln.Close() })
 
-	peerA, err := bgp.NewPeer(netip.MustParseAddr("127.0.0.1"), wire(tableA, bgp.PeerConfig{
+	peerA, err := bgp.NewPeer(netip.MustParseAddr("127.0.0.1"), changed.watch(wire(tableA, bgp.PeerConfig{
 		LocalASN:        65001,
 		LocalID:         bgp.MustParseIdentifier("192.0.2.1"),
 		Passive:         true,
 		Families:        []bgp.Family{v4u},
 		GracefulRestart: gr,
 		Logger:          logger(t, "A"),
-	}))
+	})))
 	if err != nil {
 		t.Fatalf("failed to create peer A: %v", err)
 	}
 
 	raddrB := netip.MustParseAddrPort(ln.Addr().String())
-	cfgB := wire(tableB, bgp.PeerConfig{
+	cfgB := changed.watch(wire(tableB, bgp.PeerConfig{
 		LocalASN:        65002,
 		LocalID:         bgp.MustParseIdentifier("192.0.2.2"),
 		Families:        []bgp.Family{v4u},
 		GracefulRestart: gr,
 		Logger:          logger(t, "B1"),
-	})
+	}))
+
 	cfgB.Dialer.Port = raddrB.Port()
 	peerB1, err := bgp.NewPeer(raddrB.Addr(), cfgB)
 	if err != nil {
 		t.Fatalf("failed to create peer B1: %v", err)
 	}
 
-	acceptDone := make(chan struct{})
-	go func() {
-		defer close(acceptDone)
+	var accept sync.WaitGroup
+	accept.Go(func() {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
@@ -714,34 +808,18 @@ func TestTablePeersTCP(t *testing.T) {
 				_ = c.Close()
 			}
 		}
-	}()
-	t.Cleanup(func() {
-		_ = ln.Close()
-		<-acceptDone
 	})
 
-	// run starts a Peer and joins its Run goroutine in cleanup: Run's
-	// teardown logs through t.Output, which panics if written after the
-	// test completes.
-	run := func(p *bgp.Peer) context.CancelFunc {
-		ctx, cancel := context.WithCancel(t.Context())
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			_ = p.Run(ctx)
-		}()
-		t.Cleanup(func() {
-			cancel()
-			<-done
-		})
-		return cancel
-	}
+	t.Cleanup(func() {
+		_ = ln.Close()
+		accept.Wait()
+	})
 
-	run(peerA)
-	cancelB1 := run(peerB1)
+	runPeer(t, peerA)
+	cancelB1 := runPeer(t, peerB1)
 
 	// Phase 1: both tables learn the other speaker's static route.
-	waitFor(t, "both tables to learn a fresh route", func() bool {
+	waitFor(t, "both tables to learn a fresh route", changed, func() bool {
 		ra, rb := tableA.Routes(peerA, v4u), tableB.Routes(peerB1, v4u)
 		return len(ra) == 1 && ra[0].Prefix == pB && !ra[0].Stale &&
 			len(rb) == 1 && rb[0].Prefix == pA && !rb[0].Stale
@@ -750,7 +828,7 @@ func TestTablePeersTCP(t *testing.T) {
 	// Phase 2: B shuts down with Administrative Shutdown. Both speakers
 	// advertised the N bit, so A retains B's route as stale.
 	cancelB1()
-	waitFor(t, "table A to retain B's route as stale", func() bool {
+	waitFor(t, "table A to retain B's route as stale", changed, func() bool {
 		ra := tableA.Routes(peerA, v4u)
 		return len(ra) == 1 && ra[0].Prefix == pB && ra[0].Stale
 	})
@@ -764,9 +842,9 @@ func TestTablePeersTCP(t *testing.T) {
 		t.Fatalf("failed to create peer B2: %v", err)
 	}
 
-	run(peerB2)
+	runPeer(t, peerB2)
 
-	waitFor(t, "table A to sweep back to a fresh route", func() bool {
+	waitFor(t, "table A to sweep back to a fresh route", changed, func() bool {
 		ra := tableA.Routes(peerA, v4u)
 		return len(ra) == 1 && ra[0].Prefix == pB && !ra[0].Stale
 	})
@@ -909,19 +987,55 @@ func (fs *fakeSweep) afterFunc(d time.Duration, f func()) func() bool {
 	}
 }
 
-// waitFor polls cond until it holds or a generous deadline expires.
-func waitFor(t *testing.T, msg string, cond func() bool) {
+// waitFor checks cond after each signal on changed until it holds, or fails
+// the test when a generous deadline expires first.
+func waitFor(t *testing.T, msg string, changed changes, cond func() bool) {
 	t.Helper()
 
-	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
-		if cond() {
-			return
+	deadline := time.After(30 * time.Second)
+	for !cond() {
+		select {
+		case <-changed:
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s", msg)
 		}
+	}
+}
 
-		time.Sleep(25 * time.Millisecond)
+// A changes channel signals that a Table's state may have changed, so a test
+// rechecks its condition on each signal instead of polling. It has capacity
+// one: a pending signal covers every change made before it is received.
+type changes chan struct{}
+
+// notify signals a change without blocking.
+func (c changes) notify() {
+	select {
+	case c <- struct{}{}:
+	default:
+	}
+}
+
+// watch wraps the handlers in cfg which change a Table's state to notify c
+// after each returns.
+func (c changes) watch(cfg bgp.PeerConfig) bgp.PeerConfig {
+	onEstablished, onUpdate, onClose := cfg.OnEstablished, cfg.OnUpdate, cfg.OnClose
+
+	cfg.OnEstablished = func(ctx context.Context, p *bgp.Peer, s bgp.Session) error {
+		defer c.notify()
+		return onEstablished(ctx, p, s)
 	}
 
-	t.Fatalf("timed out waiting for %s", msg)
+	cfg.OnUpdate = func(ctx context.Context, p *bgp.Peer, u *bgp.Update, d *bgp.UpdateDiagnostics) error {
+		defer c.notify()
+		return onUpdate(ctx, p, u, d)
+	}
+
+	cfg.OnClose = func(p *bgp.Peer, cl bgp.Close) {
+		defer c.notify()
+		onClose(p, cl)
+	}
+
+	return cfg
 }
 
 // logger emits a peer's logs under -test.v, silently discarding otherwise.

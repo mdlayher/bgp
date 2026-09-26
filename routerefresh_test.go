@@ -1,7 +1,6 @@
 package bgp
 
 import (
-	"bytes"
 	"testing"
 )
 
@@ -16,10 +15,22 @@ func TestRouteRefreshSubtypeRoundTrip(t *testing.T) {
 		name    string
 		subtype RouteRefreshSubtype
 	}{
-		{name: "request", subtype: RouteRefreshRequest},
-		{name: "BoRR", subtype: RouteRefreshBegin},
-		{name: "EoRR", subtype: RouteRefreshEnd},
-		{name: "unassigned", subtype: 200},
+		{
+			name:    "request",
+			subtype: RouteRefreshRequest,
+		},
+		{
+			name:    "BoRR",
+			subtype: RouteRefreshBegin,
+		},
+		{
+			name:    "EoRR",
+			subtype: RouteRefreshEnd,
+		},
+		{
+			name:    "unassigned",
+			subtype: 200,
+		},
 	}
 
 	for _, tt := range tests {
@@ -27,7 +38,10 @@ func TestRouteRefreshSubtypeRoundTrip(t *testing.T) {
 			t.Parallel()
 
 			want := &RouteRefresh{
-				Family:  Family{AFI: AFIIPv6, SAFI: SAFIUnicast},
+				Family: Family{
+					AFI:  AFIIPv6,
+					SAFI: SAFIUnicast,
+				},
 				Subtype: tt.subtype,
 			}
 
@@ -37,8 +51,8 @@ func TestRouteRefreshSubtypeRoundTrip(t *testing.T) {
 			}
 
 			wantB := testMessage(MessageTypeRouteRefresh, []byte{0x00, 0x02, byte(tt.subtype), 0x01})
-			if !bytes.Equal(wantB, b) {
-				t.Fatalf("unexpected ROUTE-REFRESH bytes:\nwant: %x\n got: %x", wantB, b)
+			if d := diff(t, wantB, b); d != "" {
+				t.Fatalf("unexpected ROUTE-REFRESH bytes (-want +got):\n%s", d)
 			}
 
 			r, err := ParseMessage(b)
@@ -55,9 +69,9 @@ func TestRouteRefreshSubtypeRoundTrip(t *testing.T) {
 
 // TestRouteRefreshReservedByte pins the RFC 7313 contract for the byte RFC
 // 2918 reserved: a ROUTE-REFRESH with a nonzero value there round-trips byte
-// for byte through ParseMessage and AppendBinary, since the byte is now the
-// Message Subtype and an unnegotiated or unassigned value must survive
-// for whoever consumes it next.
+// for byte through ParseMessage and AppendBinary. RFC 7313 defines the byte
+// as the Message Subtype, and an unnegotiated or unassigned value must
+// survive for whoever consumes it next.
 func TestRouteRefreshReservedByte(t *testing.T) {
 	t.Parallel()
 
@@ -72,7 +86,14 @@ func TestRouteRefreshReservedByte(t *testing.T) {
 		t.Fatalf("failed to parse ROUTE-REFRESH: %v", err)
 	}
 
-	want := &RouteRefresh{Family: Family{AFI: AFIIPv6, SAFI: SAFIUnicast}, Subtype: 7}
+	want := &RouteRefresh{
+		Family: Family{
+			AFI:  AFIIPv6,
+			SAFI: SAFIUnicast,
+		},
+		Subtype: 7,
+	}
+
 	if d := diff[Message](t, want, r.Message); d != "" {
 		t.Fatalf("unexpected ROUTE-REFRESH (-want +got):\n%s", d)
 	}
@@ -82,8 +103,8 @@ func TestRouteRefreshReservedByte(t *testing.T) {
 		t.Fatalf("failed to marshal ROUTE-REFRESH: %v", err)
 	}
 
-	if !bytes.Equal(wire, b) {
-		t.Fatalf("ROUTE-REFRESH did not round-trip:\nwant: %x\n got: %x", wire, b)
+	if d := diff(t, wire, b); d != "" {
+		t.Fatalf("ROUTE-REFRESH did not round-trip (-want +got):\n%s", d)
 	}
 }
 
@@ -147,7 +168,11 @@ func TestRouteRefreshLengthErrors(t *testing.T) {
 				data = wire
 			}
 
-			wantMessageError(t, err, tt.code, tt.subcode, data)
+			wantMessageError(t, err, &Notification{
+				Code:    tt.code,
+				Subcode: tt.subcode,
+				Data:    data,
+			})
 		})
 	}
 }

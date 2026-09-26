@@ -161,9 +161,9 @@ type Close struct {
 
 	// Local reports which speaker ended the session or attempt. True when
 	// this speaker did: it sent Notification, or gave up on a transport
-	// whose write failed — including the hold-time write deadline. False
-	// when the peer did: it sent Notification, or its connection ended,
-	// which is any read error that is not a parse error. Notification is
+	// whose write failed, such as on the send hold timer's write deadline.
+	// False when the peer did: it sent Notification, or its connection
+	// ended, which is any read error that is not a parse error. Notification is
 	// nil exactly when the transport failed, so a nil Notification with
 	// Local set is RFC 4271's TcpConnectionFails event on this side of
 	// the connection.

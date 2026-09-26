@@ -18,14 +18,17 @@ func TestWriterRoundTrip(t *testing.T) {
 	// tests' hand-built records use, so the encodings can be compared. The
 	// messages are opaque to both the Writer and the Reader.
 	v4 := Session{
-		PeerASN: 65536, LocalASN: 65537,
-		Peer:  netip.MustParseAddr("192.0.2.2"),
-		Local: netip.MustParseAddr("192.0.2.1"),
+		PeerASN:  65536,
+		LocalASN: 65537,
+		Peer:     netip.MustParseAddr("192.0.2.2"),
+		Local:    netip.MustParseAddr("192.0.2.1"),
 	}
+
 	v6 := Session{
-		PeerASN: 65536, LocalASN: 65537,
-		Peer:  netip.MustParseAddr("2001:db8::2"),
-		Local: netip.MustParseAddr("2001:db8::1"),
+		PeerASN:  65536,
+		LocalASN: 65537,
+		Peer:     netip.MustParseAddr("2001:db8::2"),
+		Local:    netip.MustParseAddr("2001:db8::1"),
 	}
 
 	ts := time.Unix(0, 0)
@@ -64,6 +67,7 @@ func TestWriterRoundTrip(t *testing.T) {
 	}
 
 	r := NewReader(&buf)
+
 	var got [][]byte
 	for {
 		m, err := r.Next()
@@ -86,7 +90,6 @@ func TestWriterRoundTrip(t *testing.T) {
 func TestWriterSessionErrors(t *testing.T) {
 	t.Parallel()
 
-	w := NewWriter(io.Discard)
 	tests := []struct {
 		name string
 		s    Session
@@ -103,7 +106,9 @@ func TestWriterSessionErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := w.WriteMessage(time.Time{}, tt.s, nil); err == nil {
+			t.Parallel()
+
+			if err := NewWriter(io.Discard).WriteMessage(time.Time{}, tt.s, nil); err == nil {
 				t.Fatal("expected an error, but none occurred")
 			}
 		})

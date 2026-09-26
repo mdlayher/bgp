@@ -96,14 +96,6 @@ func (cs Communities) appendData(b []byte) ([]byte, error) {
 	return b, nil
 }
 
-// An ExtendedCommunity is a BGP extended community value, as described in
-// RFC 4360: 8 wire bytes, carried verbatim. The type and subtype registries
-// are large, so the value is deliberately opaque; only the common route
-// target and route origin forms (NewRouteTarget, NewRouteOrigin) and the
-// origin validation state (NewValidationState, ValidationState) are
-// interpreted, by their constructors, accessors, and String.
-type ExtendedCommunity [8]byte
-
 // Extended community wire values interpreted by this package: the AS and
 // IPv4 address specific types (RFC 4360, RFC 5668) and their route target
 // and route origin subtypes, and the non-transitive opaque type's origin
@@ -122,9 +114,9 @@ const (
 
 // A ValidationState is the result of route origin validation (RFC 6811)
 // for a route, as carried between speakers in an extended community (RFC
-// 8097). Validation itself — the prefix-to-origin database and the lookup
-// — is the caller's, exactly as route policy is; this package only carries
-// the result.
+// 8097). Validation itself, meaning the prefix-to-origin database and the
+// lookup, is the caller's, exactly as route policy is; this package only
+// carries the result.
 type ValidationState uint8
 
 // The origin validation states of RFC 8097, section 2.
@@ -147,6 +139,14 @@ func (s ValidationState) String() string {
 		return fmt.Sprintf("unknown(%d)", uint8(s))
 	}
 }
+
+// An ExtendedCommunity is a BGP extended community value, as described in
+// RFC 4360: 8 wire bytes, carried verbatim. The type and subtype registries
+// are large, so the value is deliberately opaque. Only the common route
+// target and route origin forms and the origin validation state are
+// interpreted, by their constructors, accessors, and String: NewRouteTarget,
+// NewRouteOrigin, NewValidationState, and ValidationState.
+type ExtendedCommunity [8]byte
 
 // NewValidationState produces the origin validation state ExtendedCommunity
 // (RFC 8097) carrying s: a non-transitive opaque community, so it does not
@@ -179,7 +179,7 @@ func NewRouteTarget(asn, value uint32) (ExtendedCommunity, error) {
 	return newASSpecific(ecommSubtypeRouteTarget, asn, value)
 }
 
-// NewRouteOrigin produces a route origin (site of origin) ExtendedCommunity
+// NewRouteOrigin produces a route origin, or site of origin, ExtendedCommunity
 // from an ASN and a value, choosing the two-octet or four-octet AS specific
 // encoding to fit the ASN. The four-octet encoding only has room for a 2
 // byte value.

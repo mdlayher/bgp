@@ -108,7 +108,11 @@ func (e *MessageError) Error() string {
 // e, as described in RFC 4271, section 6. The Notification owns its Data:
 // mutating it does not reach back into e.
 func (e *MessageError) Notification() *Notification {
-	return &Notification{Code: e.Code, Subcode: e.Subcode, Data: bytes.Clone(e.Data)}
+	return &Notification{
+		Code:    e.Code,
+		Subcode: e.Subcode,
+		Data:    bytes.Clone(e.Data),
+	}
 }
 
 // newMessageError produces a *MessageError with the given code, subcode,

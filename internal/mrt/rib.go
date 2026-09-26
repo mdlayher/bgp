@@ -186,6 +186,7 @@ func parseRIBRecord(b []byte, v4, addPath bool) ([]RIBEntry, error) {
 			Prefix: prefix,
 			Attrs:  b[head : head+alen : head+alen],
 		})
+
 		b = b[head+alen:]
 	}
 
