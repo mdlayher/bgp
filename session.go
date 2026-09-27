@@ -136,6 +136,13 @@ type Session struct {
 	// caller's.
 	LongLivedGracefulRestart *LongLivedGracefulRestart
 
+	// Role is the peer's advertised BGP Role (RFC 9234), or nil when the
+	// peer advertised none, or only a malformed one. It is reported
+	// whether or not Identity.Role is configured, and carries an
+	// unassigned value verbatim. With a local role configured,
+	// negotiation has already checked that it pairs.
+	Role *Role
+
 	// HoldTime is the negotiated hold time: the minimum of the two
 	// speakers' proposals, and the budget for a single handler invocation.
 	HoldTime time.Duration

@@ -71,6 +71,10 @@ func buildOpen(id Identity, restarting bool) (*Open, error) {
 		caps = append(caps, ac)
 	}
 
+	if id.Role != nil {
+		caps = append(caps, RoleCapability(id.Role.Role))
+	}
+
 	caps = append(caps, id.Capabilities...)
 
 	o := &Open{
@@ -146,6 +150,10 @@ func (f *FSM) negotiate(local, o *Open) (Session, *MessageError) {
 			"zero hold time is not supported")
 	}
 
+	if err := f.checkRole(o); err != nil {
+		return Session{}, err
+	}
+
 	fams := negotiatedFamilies(f.families, o.Capabilities)
 	if len(fams) == 0 {
 		var data []byte
@@ -168,8 +176,78 @@ func (f *FSM) negotiate(local, o *Open) (Session, *MessageError) {
 		GracefulRestart:          gracefulRestart(op.Capabilities),
 		LongLivedGracefulRestart: longLivedGracefulRestart(op.Capabilities),
 		AddPath:                  negotiatedAddPath(f.cfg.AddPath, fams, op.Capabilities),
+		Role:                     peerRole(op.Capabilities),
 		HoldTime:                 min(f.cfg.HoldTime, o.HoldTime),
 	}, nil
+}
+
+// checkRole checks the peer's BGP Role against the local one, per RFC 9234,
+// section 4.2, and returns the Role Mismatch error which rejects the OPEN,
+// or nil. There is no check without a local role. NewFSM pins a peer with
+// a role to an external AS, and negotiate has already checked the pin.
+func (f *FSM) checkRole(o *Open) *MessageError {
+	if f.cfg.Role == nil {
+		return nil
+	}
+
+	// Identical capabilities count as one. Conflicting ones and a
+	// malformed one are a mismatch; RoleConfig says why.
+	var (
+		pr   Role
+		seen bool
+	)
+
+	for _, c := range o.Capabilities {
+		if c.Code != CapabilityRole {
+			continue
+		}
+
+		r, err := c.Role()
+		if err != nil {
+			return openError(SubcodeRoleMismatch, nil, "malformed BGP Role capability")
+		}
+
+		if seen && r != pr {
+			return openError(SubcodeRoleMismatch, nil,
+				"remote advertised conflicting BGP Roles %s and %s", pr, r)
+		}
+
+		pr, seen = r, true
+	}
+
+	if !seen {
+		if f.cfg.Role.Strict {
+			return openError(SubcodeRoleMismatch, nil,
+				"remote advertised no BGP Role, and strict mode requires one")
+		}
+
+		return nil
+	}
+
+	if !f.cfg.Role.Role.pairs(pr) {
+		return openError(SubcodeRoleMismatch, nil,
+			"remote role %s does not pair with local role %s", pr, f.cfg.Role.Role)
+	}
+
+	return nil
+}
+
+// peerRole decodes the first well-formed BGP Role capability in caps, or
+// nil when there is none; a malformed one is skipped, like a malformed
+// graceful restart capability. When a local role is configured, checkRole
+// has already proven every Role capability well-formed and identical.
+func peerRole(caps []Capability) *Role {
+	for _, c := range caps {
+		if c.Code != CapabilityRole {
+			continue
+		}
+
+		if r, err := c.Role(); err == nil {
+			return &r
+		}
+	}
+
+	return nil
 }
 
 // negotiatedAddPath intersects the local add-path configuration with the

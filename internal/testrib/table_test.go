@@ -5,7 +5,9 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -850,6 +852,270 @@ func TestTablePeersTCP(t *testing.T) {
 	})
 }
 
+// TestTableOTCIngress proves the RFC 9234 OTC ingress procedure on a
+// session with a lateral peer: a unicast route without OTC is stored with
+// the peer's ASN added, in the NLRI field and in MP_REACH_NLRI alike, and a
+// route whose OTC names another AS is a leak, stored as a withdrawal.
+func TestTableOTCIngress(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		tb  = newTable(t, testrib.Config{})
+		p   = testPeer(t)
+
+		pA = netip.MustParsePrefix("198.51.100.0/24")
+		pB = netip.MustParsePrefix("203.0.113.0/24")
+		p6 = netip.MustParsePrefix("2001:db8::/32")
+	)
+
+	if err := tb.OnEstablished(ctx, p, roleSession(65002, v4u, v6u)); err != nil {
+		t.Fatalf("failed to establish: %v", err)
+	}
+
+	if err := tb.OnUpdate(ctx, p, &bgp.Update{
+		NLRI: []netip.Prefix{pA},
+		Attributes: attrs(
+			t,
+			bgp.OriginIGP,
+			bgp.ASPath{{ASNs: []uint32{65002}}},
+			bgp.MPReachNLRI{
+				Family:  v6u,
+				NextHop: netip.MustParseAddr("2001:db8::1"),
+				NLRI:    bgp.Prefixes{p6},
+			},
+		),
+	}, nil); err != nil {
+		t.Fatalf("failed to apply UPDATE: %v", err)
+	}
+
+	// pB arrives from the peer carrying another AS's OTC: a route the
+	// peer learned from its own peer or provider, leaked sideways.
+	if err := tb.OnUpdate(ctx, p, &bgp.Update{
+		NLRI: []netip.Prefix{pB},
+		Attributes: attrs(
+			t,
+			bgp.OriginIGP,
+			bgp.ASPath{{ASNs: []uint32{65002, 64510}}},
+			bgp.OTC(64510),
+		),
+	}, nil); err != nil {
+		t.Fatalf("failed to apply leaked UPDATE: %v", err)
+	}
+
+	for _, f := range []bgp.Family{v4u, v6u} {
+		rs := tb.Routes(p, f)
+		if len(rs) != 1 {
+			t.Fatalf("expected one %v route, but got: %v", f, prefixes(rs))
+		}
+
+		otc, ok, err := bgp.Lookup[bgp.OTC](rs[0].Attributes)
+		if err != nil || !ok || otc != 65002 {
+			t.Fatalf("unexpected OTC on %v: got %d, %t, %v", rs[0].Prefix, otc, ok, err)
+		}
+	}
+}
+
+// TestTableOTCInternal proves the Table's eBGP guard: a Session from an
+// internal peer applies no OTC procedure, whatever its Local OPEN carries.
+// The bgp package never advertises a role on such a session; a Table reads
+// only the Session, so it guards regardless.
+func TestTableOTCInternal(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		tb  = newTable(t, testrib.Config{})
+		p   = testPeer(t)
+	)
+
+	if err := tb.OnEstablished(ctx, p, roleSession(65001, v4u)); err != nil {
+		t.Fatalf("failed to establish: %v", err)
+	}
+
+	announce(t, tb, p, "198.51.100.0/24")
+
+	if err := tb.OnUpdate(ctx, p, &bgp.Update{
+		NLRI: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
+		Attributes: attrs(
+			t,
+			bgp.OriginIGP,
+			bgp.ASPath{{ASNs: []uint32{64510}}},
+			bgp.OTC(64510),
+		),
+	}, nil); err != nil {
+		t.Fatalf("failed to apply UPDATE: %v", err)
+	}
+
+	rs := tb.Routes(p, v4u)
+	if len(rs) != 2 {
+		t.Fatalf("expected both routes, but got: %v", prefixes(rs))
+	}
+
+	if _, ok := bgp.RawAttributes(rs[0].Attributes).Find(bgp.AttrOTC); ok {
+		t.Fatalf("expected no OTC added to %v on an internal session", rs[0].Prefix)
+	}
+}
+
+// TestTableOTCPeersTCP proves the OTC procedures end to end over a real
+// negotiation: two Peers over TCP, each advertising the Peer role. Egress
+// is observed on the wire: each side withholds its route learned from a
+// provider. Ingress is observed in the tables: each side sends its other
+// route with its own ASN added, which the receiver accepts as naming the
+// lateral peer it came from.
+func TestTableOTCPeersTCP(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("skipping, test uses real TCP connections")
+	}
+
+	var (
+		pA   = netip.MustParsePrefix("198.51.100.0/24")
+		pB   = netip.MustParsePrefix("203.0.113.0/24")
+		held = netip.MustParsePrefix("192.0.2.0/24")
+		role = &bgp.RoleConfig{
+			Role:   bgp.RolePeer,
+			Strict: true,
+		}
+	)
+
+	// local builds a Loc-RIB whose first UPDATE was learned from provider
+	// 64510, carrying the OTC this speaker's own ingress stamped on it. A
+	// route from a provider must not be advertised to a lateral peer. It
+	// precedes the sendable route, so were it sent, the FIFO session would
+	// deliver it before the route the test waits for.
+	local := func(pre netip.Prefix, nh string) map[bgp.Family][]*bgp.Update {
+		return map[bgp.Family][]*bgp.Update{v4u: {
+			{
+				NLRI: []netip.Prefix{held},
+				Attributes: attrs(
+					t,
+					bgp.OriginIGP,
+					bgp.ASPath{{ASNs: []uint32{64510}}},
+					bgp.NextHop(netip.MustParseAddr(nh)),
+					bgp.OTC(64510),
+				),
+			},
+			{
+				NLRI: []netip.Prefix{pre},
+				Attributes: attrs(
+					t,
+					bgp.OriginIGP,
+					bgp.ASPath{{ASNs: []uint32{64512}}},
+					bgp.NextHop(netip.MustParseAddr(nh)),
+				),
+			},
+		}}
+	}
+
+	changed := make(changes, 1)
+	tableA := newTable(t, testrib.Config{Local: local(pA, "192.0.2.1")})
+	tableB := newTable(t, testrib.Config{Local: local(pB, "192.0.2.2")})
+
+	// Each side's receipt of held is watched on the wire, before its Table
+	// sees the UPDATE: a receiver's own ingress would drop the leak, which
+	// would hide a broken egress.
+	heldA := &prefixWatch{prefix: held}
+	heldB := &prefixWatch{prefix: held}
+
+	// A accepts, B dials.
+	ln, err := (&bgp.ListenConfig{}).Listen(t.Context(), netip.MustParseAddrPort("127.0.0.1:0"))
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+
+	t.Cleanup(func() { _ = ln.Close() })
+
+	cfgA := changed.watch(heldA.watch(wire(tableA, bgp.PeerConfig{
+		LocalASN: 65001,
+		LocalID:  bgp.MustParseIdentifier("192.0.2.1"),
+		PeerASN:  65002,
+		Passive:  true,
+		Families: []bgp.Family{v4u},
+		Role:     role,
+		Logger:   logger(t, "A"),
+	})))
+
+	peerA, err := bgp.NewPeer(netip.MustParseAddr("127.0.0.1"), cfgA)
+	if err != nil {
+		t.Fatalf("failed to create peer A: %v", err)
+	}
+
+	raddrB := netip.MustParseAddrPort(ln.Addr().String())
+	cfgB := changed.watch(heldB.watch(wire(tableB, bgp.PeerConfig{
+		LocalASN: 65002,
+		LocalID:  bgp.MustParseIdentifier("192.0.2.2"),
+		PeerASN:  65001,
+		Families: []bgp.Family{v4u},
+		Role:     role,
+		Logger:   logger(t, "B"),
+	})))
+
+	cfgB.Dialer.Port = raddrB.Port()
+	peerB, err := bgp.NewPeer(raddrB.Addr(), cfgB)
+	if err != nil {
+		t.Fatalf("failed to create peer B: %v", err)
+	}
+
+	var accept sync.WaitGroup
+	accept.Go(func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+
+			if err := peerA.DeliverConn(c); err != nil {
+				_ = c.Close()
+			}
+		}
+	})
+
+	t.Cleanup(func() {
+		_ = ln.Close()
+		accept.Wait()
+	})
+
+	runPeer(t, peerA)
+	runPeer(t, peerB)
+
+	waitFor(t, "both tables to learn the other's route", changed, func() bool {
+		return len(tableA.Routes(peerA, v4u)) > 0 && len(tableB.Routes(peerB, v4u)) > 0
+	})
+
+	if heldA.seen.Load() || heldB.seen.Load() {
+		t.Fatalf("a route learned from a provider was sent to a lateral peer: A received %t, B received %t",
+			heldA.seen.Load(), heldB.seen.Load())
+	}
+
+	for _, tt := range []struct {
+		rs   []testrib.Route
+		pre  netip.Prefix
+		from bgp.OTC
+	}{
+		{
+			rs:   tableA.Routes(peerA, v4u),
+			pre:  pB,
+			from: 65002,
+		},
+		{
+			rs:   tableB.Routes(peerB, v4u),
+			pre:  pA,
+			from: 65001,
+		},
+	} {
+		if len(tt.rs) != 1 || tt.rs[0].Prefix != tt.pre {
+			t.Fatalf("expected only %v, but got: %v", tt.pre, prefixes(tt.rs))
+		}
+
+		otc, ok, err := bgp.Lookup[bgp.OTC](tt.rs[0].Attributes)
+		if err != nil || !ok || otc != tt.from {
+			t.Fatalf("unexpected OTC on %v: got %d, %t, %v", tt.pre, otc, ok, err)
+		}
+	}
+}
+
 // wire is the pluggable-RIB wiring pattern: a Table attaches to a peer by assigning
 // its handler-shaped methods into the PeerConfig, and nothing else.
 func wire(tb *testrib.Table, cfg bgp.PeerConfig) bgp.PeerConfig {
@@ -916,6 +1182,21 @@ func session(localN bool, gr *bgp.GracefulRestart, families ...bgp.Family) bgp.S
 		GracefulRestart: gr,
 		HoldTime:        90 * time.Second,
 	}
+}
+
+// roleSession synthesizes the Session a Table sees at establishment when
+// this speaker, AS 65001, advertised the Peer role to a peer in peerASN.
+func roleSession(peerASN uint32, families ...bgp.Family) bgp.Session {
+	s := session(false, nil, families...)
+	s.Local.Capabilities = append(s.Local.Capabilities, bgp.RoleCapability(bgp.RolePeer))
+	s.Peer = &bgp.Open{
+		ASN:          peerASN,
+		HoldTime:     90 * time.Second,
+		ID:           bgp.MustParseIdentifier("192.0.2.2"),
+		Capabilities: []bgp.Capability{bgp.RoleCapability(bgp.RolePeer)},
+	}
+
+	return s
 }
 
 // announce applies an UPDATE announcing one IPv4 unicast prefix.
@@ -1033,6 +1314,28 @@ func (c changes) watch(cfg bgp.PeerConfig) bgp.PeerConfig {
 	cfg.OnClose = func(p *bgp.Peer, cl bgp.Close) {
 		defer c.notify()
 		onClose(p, cl)
+	}
+
+	return cfg
+}
+
+// A prefixWatch records whether prefix ever arrives in the NLRI of a
+// received UPDATE: an observation of the wire, independent of what a
+// Table then stores.
+type prefixWatch struct {
+	prefix netip.Prefix
+	seen   atomic.Bool
+}
+
+// watch wraps cfg's OnUpdate to record prefix before the handler runs.
+func (w *prefixWatch) watch(cfg bgp.PeerConfig) bgp.PeerConfig {
+	onUpdate := cfg.OnUpdate
+	cfg.OnUpdate = func(ctx context.Context, p *bgp.Peer, u *bgp.Update, d *bgp.UpdateDiagnostics) error {
+		if slices.Contains(u.NLRI, w.prefix) {
+			w.seen.Store(true)
+		}
+
+		return onUpdate(ctx, p, u, d)
 	}
 
 	return cfg

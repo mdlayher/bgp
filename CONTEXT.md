@@ -168,7 +168,8 @@ _Avoid_: RPKI state (RPKI is the infrastructure, not the verdict)
 **OTC**:
 The "Only to Customer" attribute (RFC 9234): the autonomous system
 beyond which a route must only propagate toward customers. Used to
-detect route leaks. Role negotiation is out of scope.
+detect route leaks. The local **Role** decides when it is added and when
+its presence marks a leak; applying it to routes belongs to the caller's RIB.
 
 **Peer**:
 The remote speaker of a specific session; also the local object that
@@ -205,6 +206,13 @@ Route storage plus best-path selection (Routing Information Base).
 Permanently out of scope for this package; plugged in by the caller at
 the Peer boundary.
 _Avoid_: routing table (when the BGP-specific structure is meant)
+
+**Role**:
+The BGP Role (RFC 9234) of the local AS toward the remote AS on an eBGP
+session: Provider, Customer, RS, RS-Client, or Peer. Both speakers
+advertise theirs in a capability, and a pair which does not match is
+rejected with Role Mismatch. The role value Peer is a lateral peer, an
+AS-to-AS relationship, distinct from the **Peer** term above.
 
 **Route**:
 A prefix together with the path attributes that apply to it. Routes exist

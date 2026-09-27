@@ -726,6 +726,7 @@ func FuzzCapabilityParse(f *testing.F) {
 		llgrCap,
 		apCap,
 		fqdnCap,
+		RoleCapability(RoleCustomer),
 		{Code: CapabilityRouteRefresh},
 		{
 			Code: CapabilityAddPath,
@@ -828,6 +829,20 @@ func FuzzCapabilityParse(f *testing.F) {
 
 			if d := diff(t, fs, fs2); d != "" {
 				t.Fatalf("add-path capability did not round trip (-want +got):\n%s", d)
+			}
+		case CapabilityRole:
+			r, err := c.Role()
+			if err != nil {
+				return
+			}
+
+			r2, err := RoleCapability(r).Role()
+			if err != nil {
+				t.Fatalf("failed to re-parse BGP Role capability: %v", err)
+			}
+
+			if r != r2 {
+				t.Fatalf("BGP Role capability did not round trip: got %s, want %s", r2, r)
 			}
 		case CapabilityFQDN:
 			hostname, domain, err := c.FQDN()

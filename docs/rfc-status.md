@@ -22,7 +22,7 @@ belongs in a package of its own, such as bgp/evpn or bgp/bgpls.
 | 8092 | Large communities | Typed |
 | 4360 / 5668 | Extended communities | Opaque 8 byte values with RT and SoO constructors |
 | 8097 | Origin validation state | ValidationState extended community. ASPath.Origin gives the RFC 6811 origin AS; validation is the caller's |
-| 9234 | OTC attribute | Typed. Role negotiation is not implemented |
+| 9234 | BGP Role and OTC | Role capability, Identity.Role, and Session.Role. On eBGP sessions a peer role which does not pair, conflicting or malformed peer roles, and a missing one under strict mode draw Role Mismatch. OTC is typed, and Role.Ingress and Role.Egress are the section 5 procedures as pure functions. Applying them to IPv4 and IPv6 unicast routes, and holding a leak ineligible, are the caller's |
 | 4456 | Route reflection attributes | Typed ORIGINATOR_ID and CLUSTER_LIST. Reflection is the caller's |
 | 5065 | AS confederations | AS_CONFED_SEQUENCE and AS_CONFED_SET round-trip; ASPath.Origin skips them. Path length, MED, and loop semantics are the caller's |
 | 2918 | Route refresh | Message, capability, SendRouteRefresh, OnRouteRefresh. Replaying the Adj-RIB-Out is the caller's |

@@ -91,6 +91,13 @@ type frrNeighbor struct {
 	// advertises add-path Receive for every activated family by
 	// default, whatever this field says.
 	AddPathTxAllPaths bool
+
+	// LocalRole, if set, applies `local-role` toward this neighbor: FRR
+	// advertises the RFC 9234 BGP Role, in FRR's spelling such as
+	// "provider" or "customer", and checks the neighbor's. RoleStrict
+	// adds `strict-mode`, which requires the neighbor to advertise one.
+	LocalRole  string
+	RoleStrict bool
 }
 
 // An frr is a running FRR instance on the harness network.
@@ -140,11 +147,14 @@ func startFRR(t *testing.T, cfg frrConfig) *frr {
 	// with 10.7.0), and resets neighbors as the statements land. A
 	// speaker which dials inside that window is refused, so wait for
 	// every configured neighbor's own state machine to start: leaving
-	// Idle is FRR reporting that the hold is over.
+	// Idle is FRR reporting that the hold is over. So is a recorded
+	// NOTIFICATION: a session rejected in its OPEN exchange, such as on
+	// a Role Mismatch, passes through the other states in milliseconds
+	// and then idles through FRR's backoff, too briefly for a poll to see.
 	for _, n := range cfg.Neighbors {
 		f.poll(t, fmt.Sprintf("neighbor %s never left Idle", n.Addr), func() bool {
 			nb, err := f.neighbor(t, n.Addr)
-			return err == nil && nb.BGPState != "" && nb.BGPState != "Idle"
+			return err == nil && ((nb.BGPState != "" && nb.BGPState != "Idle") || nb.LastErrorCodeSubcode != "")
 		})
 	}
 
@@ -195,6 +205,11 @@ type frrNeighborJSON struct {
 	LastNotificationReason    string `json:"lastNotificationReason"`
 	LastNotificationHardReset bool   `json:"lastNotificationHardReset"`
 	LastShutdownDescription   string `json:"lastShutdownDescription"`
+
+	// The RFC 9234 BGP Roles of the session, in FRR's spelling, such as
+	// "provider" or "customer".
+	LocalRole  string `json:"localRole"`
+	RemoteRole string `json:"remoteRole"`
 }
 
 // An frrAddPathCapJSON is FRR's record of the add-path capability for

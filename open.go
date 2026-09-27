@@ -230,6 +230,7 @@ const (
 	CapabilityMultiprotocol            CapabilityCode = 1
 	CapabilityRouteRefresh             CapabilityCode = 2
 	CapabilityExtendedNextHop          CapabilityCode = 5
+	CapabilityRole                     CapabilityCode = 9
 	CapabilityGracefulRestart          CapabilityCode = 64
 	CapabilityFourOctetAS              CapabilityCode = 65
 	CapabilityAddPath                  CapabilityCode = 69
@@ -667,6 +668,34 @@ func (c Capability) FQDN() (hostname, domain string, err error) {
 	}
 
 	return hostname, string(d[1:]), nil
+}
+
+// RoleCapability produces a Capability which advertises the BGP Role r, as
+// described in RFC 9234, section 4.1.
+//
+// A Peer or FSM advertises its role through Identity.Role, not by placing
+// this Capability in Capabilities: negotiation must know the local role to
+// check the peer's.
+func RoleCapability(r Role) Capability {
+	return Capability{
+		Code: CapabilityRole,
+		Data: []byte{byte(r)},
+	}
+}
+
+// Role parses the BGP Role a CapabilityRole Capability advertises. An
+// unassigned value is returned as is, not rejected: whether it is
+// acceptable is negotiation's decision.
+func (c Capability) Role() (Role, error) {
+	if c.Code != CapabilityRole {
+		return 0, fmt.Errorf("bgp: capability %d is not a BGP Role capability", uint8(c.Code))
+	}
+
+	if len(c.Data) != 1 {
+		return 0, errors.New("bgp: invalid BGP Role capability")
+	}
+
+	return Role(c.Data[0]), nil
 }
 
 // appendCapability appends the wire encoding of c to b.

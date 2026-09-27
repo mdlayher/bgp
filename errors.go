@@ -14,9 +14,9 @@ const (
 	SubcodeBadMessageType            uint8 = 3
 )
 
-// OPEN Message Error subcodes, as described in RFC 4271, section 6.2, and RFC
-// 5492, section 5. These values are carried by a Notification with Code
-// NotificationOpenMessageError.
+// OPEN Message Error subcodes, as described in RFC 4271, section 6.2, RFC
+// 5492, section 5, and RFC 9234, section 4.2. These values are carried by a
+// Notification with Code NotificationOpenMessageError.
 const (
 	SubcodeUnsupportedVersionNumber     uint8 = 1
 	SubcodeBadPeerAS                    uint8 = 2
@@ -24,6 +24,7 @@ const (
 	SubcodeUnsupportedOptionalParameter uint8 = 4
 	SubcodeUnacceptableHoldTime         uint8 = 6
 	SubcodeUnsupportedCapability        uint8 = 7
+	SubcodeRoleMismatch                 uint8 = 11
 )
 
 // UPDATE Message Error subcodes, as described in RFC 4271, section 6.3. These
@@ -193,6 +194,8 @@ func subcodeString(code NotificationCode, subcode uint8) string {
 			return "Unacceptable Hold Time"
 		case SubcodeUnsupportedCapability:
 			return "Unsupported Capability"
+		case SubcodeRoleMismatch:
+			return "Role Mismatch"
 		}
 	case NotificationUpdateMessageError:
 		switch subcode {

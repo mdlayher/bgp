@@ -188,6 +188,23 @@ var _LongLivedGracefulRestartCloneNeedsRegeneration = LongLivedGracefulRestart(s
 	Families []LongLivedGracefulRestartFamily
 }{})
 
+// Clone makes a deep copy of RoleConfig.
+// The result aliases no memory with the original.
+func (src *RoleConfig) Clone() *RoleConfig {
+	if src == nil {
+		return nil
+	}
+	dst := new(RoleConfig)
+	*dst = *src
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _RoleConfigCloneNeedsRegeneration = RoleConfig(struct {
+	Role   Role
+	Strict bool
+}{})
+
 // Clone makes a deep copy of MessageError.
 // The result aliases no memory with the original.
 func (src *MessageError) Clone() *MessageError {

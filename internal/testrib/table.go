@@ -2,7 +2,8 @@
 //
 // It exists as the permanent in-tree proof that a RIB living outside the bgp
 // package can be built against the Peer boundary alone, including graceful
-// restart helper behavior from Close and Session.GracefulRestart. It touches
+// restart helper behavior from Close and Session.GracefulRestart, and the
+// RFC 9234 OTC procedures from Role.Ingress and Role.Egress. It touches
 // only the bgp package's exported API, and it is deliberately naive: no
 // best-path selection ever runs here, and nothing about its storage is tuned.
 // The local routes are the caller's static assertion of its best paths. Do
@@ -98,14 +99,47 @@ type peerState struct {
 	gen       int
 	stopSweep func() bool
 
+	// sess is the latest established session's state, remade by each
+	// OnEstablished.
+	sess *sessionState
+
+	routes map[bgp.Family]map[netip.Prefix]*adjRoute
+}
+
+// A sessionState is one established session's state: its pusher's work,
+// and the BGP Role its OTC procedures apply.
+type sessionState struct {
 	// pending and wake carry the session pusher's work: the dirty set of
 	// families owing an Adj-RIB-Out replay, and its capacity-1 wake
-	// signal. Both are remade by each OnEstablished; pending is guarded
-	// by Table.mu.
+	// signal. pending is guarded by Table.mu.
 	pending map[bgp.Family]bool
 	wake    chan struct{}
 
-	routes map[bgp.Family]map[netip.Prefix]*adjRoute
+	// role is the BGP Role this speaker advertised, or nil when it
+	// advertised none or the session is internal. localASN and remoteASN are
+	// the session's AS numbers, which the OTC procedures compare against
+	// and stamp into routes.
+	role                *bgp.Role
+	localASN, remoteASN uint32
+}
+
+// egress applies the RFC 9234 OTC egress procedure to a local UPDATE in
+// family f: it reports false when the UPDATE must not be sent, and
+// otherwise returns the UPDATE to send, a copy carrying OTC when the
+// procedure adds one. The shared Loc-RIB UPDATE is never modified.
+func (ss *sessionState) egress(f bgp.Family, u *bgp.Update) (*bgp.Update, bool) {
+	if ss.role == nil || !otcFamily(f) {
+		return u, true
+	}
+
+	otc, add, ok := ss.role.Egress(ss.localASN, u.Attributes)
+	if !ok || !add {
+		return u, ok
+	}
+
+	cu := *u
+	cu.Attributes = withOTC(u.Attributes, otc)
+	return &cu, true
 }
 
 type adjRoute struct {
@@ -268,14 +302,25 @@ func (t *Table) OnEstablished(ctx context.Context, p *bgp.Peer, s bgp.Session) e
 
 	// The session's pusher starts with every negotiated family dirty and
 	// the wake primed, so its first round is the initial Adj-RIB-Out dump.
-	pending := make(map[bgp.Family]bool, len(s.Families))
-	for _, f := range s.Families {
-		pending[f] = true
+	ss := &sessionState{
+		pending: make(map[bgp.Family]bool, len(s.Families)),
+		wake:    make(chan struct{}, 1),
+		role:    sessionRole(s),
 	}
 
-	wake := make(chan struct{}, 1)
-	wake <- struct{}{}
-	ps.pending, ps.wake = pending, wake
+	for _, f := range s.Families {
+		ss.pending[f] = true
+	}
+
+	ss.wake <- struct{}{}
+
+	// Only a role reads the AS numbers, and sessionRole has proven both
+	// OPENs present.
+	if ss.role != nil {
+		ss.localASN, ss.remoteASN = s.Local.ASN, s.Peer.ASN
+	}
+
+	ps.sess = ss
 	t.mu.Unlock()
 
 	// stop is the caller's AfterFunc, so it runs outside the lock. A sweep
@@ -293,7 +338,7 @@ func (t *Table) OnEstablished(ctx context.Context, p *bgp.Peer, s bgp.Session) e
 
 	// Bulk transmission must not run synchronously in a handler; the ctx is
 	// session-scoped, so the pusher dies with the session.
-	t.wg.Go(func() { t.push(ctx, p, pending, wake) })
+	t.wg.Go(func() { t.push(ctx, p, ss) })
 	return nil
 }
 
@@ -302,16 +347,16 @@ func (t *Table) OnEstablished(ctx context.Context, p *bgp.Peer, s bgp.Session) e
 // static Loc-RIB for each family followed by its End-of-RIB marker, until
 // the session dies. The snapshot is cleared before sending: a family
 // re-marked mid-push is replayed in the next round, never lost.
-func (t *Table) push(ctx context.Context, p *bgp.Peer, pending map[bgp.Family]bool, wake <-chan struct{}) {
+func (t *Table) push(ctx context.Context, p *bgp.Peer, ss *sessionState) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-wake:
+		case <-ss.wake:
 		}
 
 		t.mu.Lock()
-		fams := slices.SortedFunc(maps.Keys(pending), func(a, b bgp.Family) int {
+		fams := slices.SortedFunc(maps.Keys(ss.pending), func(a, b bgp.Family) int {
 			if c := cmp.Compare(a.AFI, b.AFI); c != 0 {
 				return c
 			}
@@ -319,11 +364,16 @@ func (t *Table) push(ctx context.Context, p *bgp.Peer, pending map[bgp.Family]bo
 			return cmp.Compare(a.SAFI, b.SAFI)
 		})
 
-		clear(pending)
+		clear(ss.pending)
 		t.mu.Unlock()
 
 		for _, f := range fams {
 			for _, u := range t.local[f] {
+				u, ok := ss.egress(f, u)
+				if !ok {
+					continue
+				}
+
 				if err := p.SendUpdate(ctx, u); err != nil {
 					return
 				}
@@ -338,7 +388,8 @@ func (t *Table) push(ctx context.Context, p *bgp.Peer, pending map[bgp.Family]bo
 
 // OnUpdate implements PeerConfig.OnUpdate: End-of-RIB sweeps a family's stale
 // routes; any other UPDATE is applied to the peer's Adj-RIB-In. An UPDATE
-// RFC 7606 marks as a withdrawal withdraws what it announces instead. The
+// RFC 7606 marks as a withdrawal withdraws what it announces instead, and so
+// does a route leak the RFC 9234 OTC ingress procedure detects. The
 // Update references the connection's read buffer, so everything retained is
 // copied.
 //
@@ -396,11 +447,33 @@ func (t *Table) OnUpdate(_ context.Context, p *bgp.Peer, u *bgp.Update, d *bgp.U
 		delete(ps.routes[v4u], pre)
 	}
 
+	// RFC 9234, section 5: the OTC ingress procedure governs the unicast
+	// families only. A leak is ineligible, which this RIB stores as a
+	// withdrawal, and otherwise the unicast routes may gain OTC.
+	var (
+		otc       bgp.OTC
+		add, leak bool
+	)
+
+	if ps.sess != nil && ps.sess.role != nil {
+		otc, add, leak = ps.sess.role.Ingress(ps.sess.remoteASN, attrs)
+	}
+
+	otcAttrs := attrs
+	if add {
+		otcAttrs = withOTC(attrs, otc)
+	}
+
 	// announce records pre in family f, or withdraws it when the UPDATE is
 	// treated as a withdrawal.
 	announce := func(f bgp.Family, pre netip.Prefix) {
-		if withdraw {
+		if withdraw || (leak && otcFamily(f)) {
 			delete(ps.routes[f], pre)
+			return
+		}
+
+		if otcFamily(f) {
+			ps.family(f)[pre] = &adjRoute{attrs: otcAttrs}
 			return
 		}
 
@@ -436,13 +509,13 @@ func (t *Table) OnRouteRefresh(ctx context.Context, p *bgp.Peer, r *bgp.RouteRef
 	defer t.mu.Unlock()
 
 	ps, ok := t.peers[p]
-	if !ok || ps.pending == nil {
+	if !ok || ps.sess == nil {
 		return nil
 	}
 
-	ps.pending[r.Family] = true
+	ps.sess.pending[r.Family] = true
 	select {
-	case ps.wake <- struct{}{}:
+	case ps.sess.wake <- struct{}{}:
 	default:
 	}
 
@@ -585,6 +658,47 @@ func notificationSupport(o *bgp.Open) bool {
 	}
 
 	return false
+}
+
+// sessionRole returns the BGP Role this speaker advertised on s, or nil when
+// it advertised none, or only a malformed one. It also returns nil for an
+// internal session: the bgp package never advertises a role on one, and
+// roles describe eBGP sessions only, so a Session claiming otherwise gets
+// no OTC procedure.
+func sessionRole(s bgp.Session) *bgp.Role {
+	if s.Local == nil || s.Peer == nil || s.Peer.ASN == s.Local.ASN {
+		return nil
+	}
+
+	for _, c := range s.Local.Capabilities {
+		if c.Code != bgp.CapabilityRole {
+			continue
+		}
+
+		if r, err := c.Role(); err == nil {
+			return &r
+		}
+	}
+
+	return nil
+}
+
+// otcFamily reports whether the RFC 9234 OTC procedures apply to family f:
+// section 5 limits them to IPv4 and IPv6 unicast.
+func otcFamily(f bgp.Family) bool {
+	return (f.AFI == bgp.AFIIPv4 || f.AFI == bgp.AFIIPv6) && f.SAFI == bgp.SAFIUnicast
+}
+
+// withOTC returns a copy of attrs with otc appended, leaving attrs itself
+// unmodified.
+func withOTC(attrs []bgp.RawAttribute, otc bgp.OTC) []bgp.RawAttribute {
+	ras, err := bgp.MarshalAttributes(otc)
+	if err != nil {
+		// An OTC is a fixed four octets, which always marshals.
+		panic(err)
+	}
+
+	return append(slices.Clip(attrs), ras...)
 }
 
 // Wait blocks until every Adj-RIB-Out pusher goroutine has exited. Each

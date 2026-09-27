@@ -161,6 +161,14 @@ type Identity struct {
 	// package carries the negotiation and the path identifier wire forms:
 	// PathPrefixes and the Update path fields.
 	AddPath []AddPathFamily
+
+	// Role, if set, advertises the BGP Role capability (RFC 9234) and
+	// checks the peer's role against it. A role describes the
+	// relationship to one external AS, so Role requires PeerASN to be
+	// pinned to an AS other than LocalASN. It must not also appear in
+	// Capabilities. [Session.Role] reports the peer's role; the OTC procedures of
+	// [Role.Ingress] and [Role.Egress] are the caller's to apply.
+	Role *RoleConfig
 }
 
 // An FSMConfig configures an FSM. The embedded Identity's LocalASN and LocalID
@@ -359,6 +367,25 @@ type GracefulRestartConfig struct {
 	Restarting func() bool
 }
 
+// A RoleConfig configures the BGP Role an FSM or Peer advertises and
+// negotiates (RFC 9234, section 4).
+//
+// A session is rejected with Role Mismatch when the peer's role does not
+// pair with Role, when the peer advertises conflicting roles, or when it
+// advertises a Role capability whose length is not one octet. RFC 9234 is
+// silent on the last; this package rejects it because the capability exists
+// to prevent route leaks.
+type RoleConfig struct {
+	// Role is the local role: the relationship of the local AS to the
+	// remote AS. It must be an assigned Role.
+	Role Role
+
+	// Strict requires the peer to advertise a role: a peer which advertises
+	// none is rejected with Role Mismatch. Without Strict such a peer is
+	// accepted, as RFC 9234 recommends for backward compatibility.
+	Strict bool
+}
+
 // [ErrNotEstablished] is returned by SendUpdate and the SendRouteRefresh
 // methods when there is no established session, and wrapped (per errors.Is)
 // in the error of a send whose connection write failed, since that failure
@@ -461,6 +488,14 @@ func NewFSM(c FSMConfig) (*FSM, error) {
 		return nil, errors.New("bgp: an internal peer pinned to the local BGP identifier can never establish (RFC 6286)")
 	}
 
+	if c.Role != nil && (c.PeerASN == 0 || c.PeerASN == c.LocalASN) {
+		return nil, errors.New("bgp: a BGP Role requires PeerASN pinned to an external AS")
+	}
+
+	if c.Role != nil && !c.Role.Role.valid() {
+		return nil, fmt.Errorf("bgp: BGP Role %s is unassigned", c.Role.Role)
+	}
+
 	if c.HoldTime != 0 && c.HoldTime < minHoldTime {
 		return nil, fmt.Errorf("bgp: hold time must be zero or at least %s: %s", minHoldTime, c.HoldTime)
 	}
@@ -501,6 +536,8 @@ func NewFSM(c FSMConfig) (*FSM, error) {
 			return nil, errors.New("bgp: the enhanced route refresh capability is generated from EnhancedRouteRefresh and must not be set")
 		case CapabilityAddPath:
 			return nil, errors.New("bgp: the add-path capability is generated from AddPath and must not be set")
+		case CapabilityRole:
+			return nil, errors.New("bgp: the BGP Role capability is generated from Role and must not be set")
 		}
 	}
 
@@ -519,6 +556,7 @@ func NewFSM(c FSMConfig) (*FSM, error) {
 	c.GracefulRestart = c.GracefulRestart.Clone()
 	c.LongLivedGracefulRestart = c.LongLivedGracefulRestart.Clone()
 	c.AddPath = slices.Clone(c.AddPath)
+	c.Role = c.Role.Clone()
 
 	log := c.Logger
 	if log == nil {

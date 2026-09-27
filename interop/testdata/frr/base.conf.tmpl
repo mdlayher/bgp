@@ -51,6 +51,9 @@ router bgp {{.ASN}}
 {{- if .TTLSecurity}}
  neighbor {{.Addr}} ttl-security hops 1
 {{- end}}
+{{- if .LocalRole}}
+ neighbor {{.Addr}} local-role {{.LocalRole}}{{if .RoleStrict}} strict-mode{{end}}
+{{- end}}
 {{- end}}
  !
  address-family ipv4 unicast

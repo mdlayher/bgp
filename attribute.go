@@ -797,9 +797,8 @@ func (cl ClusterList) appendData(b []byte) ([]byte, error) {
 
 // An OTC is the OTC (Only to Customer) attribute: the autonomous system
 // beyond which a route must only propagate toward customers, used to detect
-// and prevent route leaks, as described in RFC 9234. The role negotiation
-// half of RFC 9234, an OPEN capability, is out of scope for this package;
-// the attribute is meaningful standalone.
+// and prevent route leaks, as described in RFC 9234. [Role.Ingress] and
+// [Role.Egress] decide when to add one and when its presence marks a leak.
 type OTC uint32
 
 func (OTC) attrType() AttrType   { return AttrOTC }
