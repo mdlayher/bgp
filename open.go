@@ -625,7 +625,8 @@ func (c Capability) AddPath() ([]AddPathFamily, error) {
 // hostname and domain name, as described in
 // draft-walton-bgp-hostname-capability-02. The wire encoding is two
 // length-prefixed UTF-8 strings, with lengths in bytes. Either string may
-// be empty. FQDNCapability fails when a string cannot fit its one-byte
+// be empty. FQDNCapability fails when the two strings together exceed 253
+// bytes: with their length bytes, they must fit a capability's one-byte
 // length.
 //
 // The capability is cosmetic: the draft says it SHOULD only be used to

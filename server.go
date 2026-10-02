@@ -571,8 +571,9 @@ func (s *Server) deliver(run *serverRun, c *Conn) {
 	}
 
 	if err := sp.p.deliverConn(c); err != nil {
-		// The peer is between attempts or its delivery slot is taken:
-		// closing is always sound, because a live remote retries its open.
+		// The peer's run has not started or has ended, or its delivery slot
+		// is taken: closing is always sound, because a live remote retries
+		// its open.
 		s.log.Debug("closed undeliverable connection", "peer", addr, "err", err)
 		_ = c.Close()
 	}

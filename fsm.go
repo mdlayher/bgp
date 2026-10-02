@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Timer defaults, from RFC 4271, sections 8.2.2 and 10, and RFC 6286.
+// Timer defaults, from RFC 4271, sections 8.2.2 and 10.
 const (
 	// defaultHoldTime is the hold time proposed when Identity.HoldTime
 	// is zero: RFC 4271's suggested value, which is also the common industry
@@ -45,8 +45,8 @@ const (
 	// (the OPEN exchange and NOTIFICATIONs), and the wait for a stuck
 	// handler's reader goroutine during session teardown. endSession spends
 	// the budget up to twice in sequence (the write deadline, then the
-	// reader join), so a worst-case teardown is two timeouts, not one, plus
-	// drainTimeout between them.
+	// reader join), so a worst-case teardown is two timeouts, not one. The
+	// drain runs within the reader join, so drainTimeout adds nothing.
 	teardownTimeout = 5 * time.Second
 
 	// drainTimeout bounds endSession's half closed drain, the wait for the
@@ -295,8 +295,10 @@ type FSMConfig struct {
 	// exchange, or sending an OPEN failed. An attempt with nothing
 	// observable in flight, such as one whose dial never produced a
 	// connection, ends without OnClose. [Close.Established] distinguishes a
-	// session end from a failed attempt. Connect returns nil exactly when
-	// OnClose has reported the attempt's Close; see [FSM.Connect].
+	// session end from a failed attempt. A nil return from Connect means
+	// OnClose has reported the attempt's Close. When ctx ends, Connect
+	// returns ctx's error whether or not one was reported; see
+	// [FSM.Connect].
 	OnClose func(f *FSM, c Close)
 
 	// OnStateChange, if set, observes every transition of the state
@@ -753,9 +755,9 @@ func (f *FSM) adopt(c *Conn) {
 //
 // ctx is honored until the message is accepted for writing. After that the
 // call is committed until the write completes or the session ends. The
-// commitment is bounded: the write runs under a deadline of the negotiated
-// hold time, so a peer which stops reading fails the write and ends the
-// session rather than parking the caller indefinitely.
+// commitment is bounded: the write runs under a deadline of the send hold
+// time, [Identity.SendHoldTime], so a peer which stops reading fails the
+// write and ends the session rather than parking the caller indefinitely.
 //
 // The error reports the send's outcome:
 //

@@ -17,7 +17,7 @@ const Port = 179
 
 // useMultipathTCP determines whether this package's connections may use
 // Multipath TCP (RFC 8684). They may not: BGP is a single-path control
-// protocol, the net package enables MPTCP by default, and an MPTCP socket
+// protocol, the net package listens with MPTCP by default, and an MPTCP socket
 // rejects every socket option a BGP speaker sets: TCP_MD5SIG, the TTL
 // options behind GTSM, IP_TOS, and TCP_USER_TIMEOUT among them.
 const useMultipathTCP = false

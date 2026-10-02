@@ -105,9 +105,9 @@ func inspectListener(fd int) (listenerFamily, error) {
 	}
 
 	// A Multipath TCP socket rejects every option a BGP speaker sets; see
-	// useMultipathTCP. The net package dials and listens with Multipath TCP
-	// by default, so an adopted socket carries it unless its creator said
-	// otherwise.
+	// useMultipathTCP. The net package listens with Multipath TCP by
+	// default, so an adopted socket which it bound carries it unless its
+	// creator said otherwise.
 	proto, err := getsockoptInt(fd, unix.SOL_SOCKET, unix.SO_PROTOCOL)
 	if err != nil {
 		return listenerFamily{}, err

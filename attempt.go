@@ -9,18 +9,22 @@ import (
 )
 
 // The concurrency shape of an FSM: one goroutine (Connect's) owns every
-// state transition, every timer, and every write. One reader
+// state transition and every timer. It makes every write too, except on an
+// established session's connection, where a writer goroutine serializes
+// caller sends and keepalives until teardown; see writeSession. One reader
 // goroutine per live TCP connection (at most two, during collision handling)
 // blocks in Conn.ReadMessage and forwards messages to the FSM goroutine.
 // Once a session is established, the caller's handlers run directly on the
 // reader, so a slow handler stalls receipt and TCP backpressure reaches the
 // peer while keepalives keep flowing outbound. The only shared state outside
-// the channels is three atomics. Each connection carries a last-received
-// timestamp, which makes the hold timer a periodic check rather than a
-// per-message channel send, and an in-handler flag for hold-expiry
-// attribution. The FSM itself carries the established connection, published
-// for the send methods, which run on caller goroutines (FSM.established).
-// New shared state needs the same level of justification.
+// the channels and the mutexes is four atomics. Each connection carries a
+// last-received timestamp, which makes the hold timer a periodic check
+// rather than a per-message channel send, and an in-handler flag for
+// hold-expiry attribution. Its Conn carries the add-path receive set, which
+// the FSM goroutine publishes for the reader; see Conn.addPath. The FSM
+// itself carries the established connection, published for the send methods,
+// which run on caller goroutines (FSM.established). New shared state needs
+// the same level of justification.
 
 // An attempt is the state of one session attempt: the connections being tracked,
 // the dial in flight, and the attempt's timers. FSM.attempt owns one per
@@ -917,9 +921,9 @@ func (a *attempt) established(ctx context.Context, fc *fsmConn) error {
 var errStuckHandler = errors.New("bgp: a handler ignored its canceled session context; its goroutine is abandoned")
 
 // endSession tears an established session down, in order. The send methods
-// are cut off first. The writer goroutine is quiesced, so that when this
-// speaker owes the peer a NOTIFICATION nothing follows it on the wire. The
-// session context is canceled so a blocked handler can return. OnClose fires
+// are cut off first. The session context is canceled so a blocked handler
+// can return. The writer goroutine is quiesced, so that when this speaker
+// owes the peer a NOTIFICATION nothing follows it on the wire. OnClose fires
 // last, after the receive path has quiesced.
 func (f *FSM) endSession(fc *fsmConn, cl Close) {
 	// Every established session ends here, and only attempt teardowns

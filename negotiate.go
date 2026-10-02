@@ -113,7 +113,7 @@ func (f *FSM) negotiate(local, o *Open) (Session, *MessageError) {
 			"peer does not support four-octet AS numbers")
 	}
 
-	// RFC 7607, section 4: an OPEN whose My Autonomous System is zero is
+	// RFC 7607, section 2: an OPEN whose My Autonomous System is zero is
 	// answered with Bad Peer AS, mirroring NewFSM's rejection of a zero
 	// local ASN.
 	if o.ASN == 0 {
