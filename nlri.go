@@ -155,21 +155,12 @@ func (rs EVPNRoutes) appendNLRI(b []byte, f Family) ([]byte, error) {
 	return b, nil
 }
 
-// parseEVPNRoutes parses EVPN NLRI records from b until b is exhausted.
-func parseEVPNRoutes(b []byte) (EVPNRoutes, error) {
+// parseEVPNRoutes parses EVPN NLRI records which validateEVPNRoutes has
+// framed.
+func parseEVPNRoutes(b []byte) EVPNRoutes {
 	var rs EVPNRoutes
 	for len(b) > 0 {
-		if len(b) < 2 {
-			return nil, updateError(SubcodeOptionalAttributeError, nil,
-				"EVPN NLRI record header truncated")
-		}
-
 		n := int(b[1])
-		if len(b[2:]) < n {
-			return nil, updateError(SubcodeOptionalAttributeError, nil,
-				"EVPN NLRI record truncated: %d of %d bytes", len(b[2:]), n)
-		}
-
 		rs = append(rs, EVPNRoute{
 			Type: EVPNRouteType(b[0]),
 			// Cloned so a parsed NLRI never references the read buffer,
@@ -180,7 +171,7 @@ func parseEVPNRoutes(b []byte) (EVPNRoutes, error) {
 		b = b[2+n:]
 	}
 
-	return rs, nil
+	return rs
 }
 
 // A LinkStateRouteType is the NLRI type of one BGP-LS route, as assigned by
@@ -256,22 +247,12 @@ func (rs LinkStateRoutes) appendNLRI(b []byte, f Family) ([]byte, error) {
 	return b, nil
 }
 
-// parseLinkStateRoutes parses BGP-LS NLRI records from b until b is
-// exhausted.
-func parseLinkStateRoutes(b []byte) (LinkStateRoutes, error) {
+// parseLinkStateRoutes parses BGP-LS NLRI records which
+// validateLinkStateRoutes has framed.
+func parseLinkStateRoutes(b []byte) LinkStateRoutes {
 	var rs LinkStateRoutes
 	for len(b) > 0 {
-		if len(b) < 4 {
-			return nil, updateError(SubcodeOptionalAttributeError, nil,
-				"BGP-LS NLRI header truncated")
-		}
-
 		n := int(binary.BigEndian.Uint16(b[2:4]))
-		if len(b[4:]) < n {
-			return nil, updateError(SubcodeOptionalAttributeError, nil,
-				"BGP-LS NLRI truncated: %d of %d bytes", len(b[4:]), n)
-		}
-
 		rs = append(rs, LinkStateRoute{
 			Type: LinkStateRouteType(binary.BigEndian.Uint16(b[0:2])),
 			// Cloned for the reason parseEVPNRoutes clones.
@@ -281,29 +262,21 @@ func parseLinkStateRoutes(b []byte) (LinkStateRoutes, error) {
 		b = b[4+n:]
 	}
 
-	return rs, nil
+	return rs
 }
 
-// A RawNLRI is reachability information in raw binary form: the shape of an
-// address family this package does not model, and the escape hatch for
-// sending one. It is the NLRI counterpart of an unparsed RawAttribute.
-//
-// Unlike Prefixes and EVPNRoutes, a RawNLRI belongs to no particular
-// family, which is what makes it an escape hatch: a caller may use it to
-// send a family whose shape this package models differently, at the cost of
-// parsing that family's NLRI themselves. Parse never produces a RawNLRI for
-// a family this package does model.
+// A RawNLRI is NLRI in raw binary form, the shape of a family this package
+// does not model. It belongs to no particular family, so a caller may also
+// use it to send a family this package models differently. Parse never
+// produces a RawNLRI for a modeled family.
 type RawNLRI []byte
 
 func (r RawNLRI) appendNLRI(b []byte, _ Family) ([]byte, error) { return append(b, r...), nil }
 
-// parseNLRI parses the NLRI of family f from b, in the shape f's wire format
-// uses. An NLRI appears only inside a multiprotocol attribute, so a
-// malformation is always an Optional Attribute Error. addPath reports that
-// the session negotiated the add-path extension for f in the receive
-// direction, so each entry carries a path identifier (RFC 7911); it is
-// only ever set for a prefix shaped family, the only shape add-path is
-// supported for.
+// parseNLRI parses the NLRI of family f from b, which validateNLRI has
+// framed. addPath reports that each entry carries an RFC 7911 path
+// identifier, and is set only for a prefix shaped family. The prefix parsers
+// check b again because parseUpdate also calls them on unvalidated fields.
 func parseNLRI(b []byte, f Family, addPath bool) (NLRI, error) {
 	// No reachability information at all is a nil NLRI whatever the family,
 	// so that nil is the one spelling of nothing in both directions: an
@@ -329,19 +302,9 @@ func parseNLRI(b []byte, f Family, addPath bool) (NLRI, error) {
 
 		return Prefixes(ps), nil
 	case f == familyEVPN:
-		rs, err := parseEVPNRoutes(b)
-		if err != nil {
-			return nil, err
-		}
-
-		return rs, nil
+		return parseEVPNRoutes(b), nil
 	case f.linkState():
-		rs, err := parseLinkStateRoutes(b)
-		if err != nil {
-			return nil, err
-		}
-
-		return rs, nil
+		return parseLinkStateRoutes(b), nil
 	default:
 		// Cloned for the reason parseEVPNRoutes clones.
 		return RawNLRI(bytes.Clone(b)), nil

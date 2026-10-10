@@ -166,13 +166,10 @@ func TestParseEVPNRoutes(t *testing.T) {
 	// Two records back to back, the second empty: the framing is a type, a
 	// length, and a value of exactly that length, and this package validates
 	// nothing beyond it.
-	got, err := parseEVPNRoutes([]byte{
+	got := parseEVPNRoutes([]byte{
 		2, 4, 0xde, 0xad, 0xbe, 0xef,
 		5, 0,
 	})
-	if err != nil {
-		t.Fatalf("failed to parse EVPN routes: %v", err)
-	}
 
 	want := EVPNRoutes{
 		{
@@ -187,56 +184,16 @@ func TestParseEVPNRoutes(t *testing.T) {
 	}
 }
 
-func TestParseEVPNRoutesErrors(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		b    []byte
-	}{
-		{
-			name: "record header truncated",
-			b:    []byte{2},
-		},
-		{
-			name: "trailing record header truncated",
-			b:    []byte{2, 1, 0xff, 5},
-		},
-		{
-			name: "value truncated",
-			b:    []byte{2, 4, 0xde, 0xad},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			// A malformed NLRI is only ever reachable inside a
-			// multiprotocol attribute, so it is an Optional Attribute
-			// Error; the attribute echo is attached by RawAttribute.Parse.
-			_, err := parseEVPNRoutes(tt.b)
-			wantMessageError(t, err, &Notification{
-				Code:    NotificationUpdateMessageError,
-				Subcode: SubcodeOptionalAttributeError,
-			})
-		})
-	}
-}
-
 func TestParseLinkStateRoutes(t *testing.T) {
 	t.Parallel()
 
 	// Two records back to back, the second empty: the framing is a type, a
 	// two byte length, and a value of exactly that length, and this package
 	// validates nothing beyond it.
-	got, err := parseLinkStateRoutes([]byte{
+	got := parseLinkStateRoutes([]byte{
 		0, 1, 0, 4, 0xde, 0xad, 0xbe, 0xef,
 		0, 2, 0, 0,
 	})
-	if err != nil {
-		t.Fatalf("failed to parse BGP-LS routes: %v", err)
-	}
 
 	want := LinkStateRoutes{
 		{
@@ -248,40 +205,6 @@ func TestParseLinkStateRoutes(t *testing.T) {
 
 	if d := diff(t, want, got); d != "" {
 		t.Fatalf("unexpected BGP-LS routes (-want +got):\n%s", d)
-	}
-}
-
-func TestParseLinkStateRoutesErrors(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		b    []byte
-	}{
-		{
-			name: "record header truncated",
-			b:    []byte{0, 1, 0},
-		},
-		{
-			name: "trailing record header truncated",
-			b:    []byte{0, 1, 0, 1, 0xff, 0, 2},
-		},
-		{
-			name: "value truncated",
-			b:    []byte{0, 1, 0, 4, 0xde, 0xad},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			_, err := parseLinkStateRoutes(tt.b)
-			wantMessageError(t, err, &Notification{
-				Code:    NotificationUpdateMessageError,
-				Subcode: SubcodeOptionalAttributeError,
-			})
-		})
 	}
 }
 

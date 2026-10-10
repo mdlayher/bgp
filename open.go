@@ -20,6 +20,10 @@ const (
 	// paramCapabilities is the OPEN optional parameter type for capabilities,
 	// as described in RFC 5492.
 	paramCapabilities = 2
+
+	// minHoldTime is the smallest nonzero hold time RFC 4271, section 6.2
+	// permits a speaker to accept.
+	minHoldTime = 3 * time.Second
 )
 
 // An Open is a BGP OPEN message, the first message sent by each peer after a
@@ -58,8 +62,8 @@ func (*Open) messageType() MessageType { return MessageTypeOpen }
 
 // AppendBinary implements encoding.BinaryAppender.
 func (o *Open) AppendBinary(b []byte) ([]byte, error) {
-	if o.HoldTime != 0 && o.HoldTime < 3*time.Second {
-		return nil, fmt.Errorf("bgp: OPEN hold time must be zero or at least 3 seconds: %s", o.HoldTime)
+	if o.HoldTime != 0 && o.HoldTime < minHoldTime {
+		return nil, fmt.Errorf("bgp: OPEN hold time must be zero or at least %s: %s", minHoldTime, o.HoldTime)
 	}
 
 	holdTime := o.HoldTime / time.Second
@@ -136,9 +140,9 @@ func parseOpen(b []byte) (*Open, error) {
 	}
 
 	// RFC 4271, section 6.2: hold times of 1 or 2 seconds must be rejected.
-	if o.HoldTime != 0 && o.HoldTime < 3*time.Second {
+	if o.HoldTime != 0 && o.HoldTime < minHoldTime {
 		return nil, openError(SubcodeUnacceptableHoldTime, nil,
-			"OPEN hold time must be zero or at least 3 seconds: %s", o.HoldTime)
+			"OPEN hold time must be zero or at least %s: %s", minHoldTime, o.HoldTime)
 	}
 
 	// RFC 6286, section 2.1: an identifier must be nonzero.

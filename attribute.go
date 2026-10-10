@@ -130,7 +130,7 @@ func (a RawAttribute) parse() (Attribute, error) {
 	case AttrOrigin:
 		return Origin(a.Data[0]), nil
 	case AttrASPath:
-		return parseASPath(a.Data)
+		return parseASPath(a.Data), nil
 	case AttrNextHop:
 		return NextHop(netip.AddrFrom4([4]byte(a.Data))), nil
 	case AttrMED:
@@ -653,13 +653,8 @@ func (p ASPath) appendData(b []byte) ([]byte, error) {
 	return b, nil
 }
 
-// parseASPath parses the data of an AS_PATH attribute. validateASPath
-// frames the segments first, so the decode loop reads only whole ones.
-func parseASPath(b []byte) (ASPath, error) {
-	if merr := validateASPath(b); merr != nil {
-		return nil, merr
-	}
-
+// parseASPath parses AS_PATH data which validateASPath has framed.
+func parseASPath(b []byte) ASPath {
 	var p ASPath
 	for len(b) > 0 {
 		typ, n := b[0], int(b[1])
@@ -689,7 +684,7 @@ func parseASPath(b []byte) (ASPath, error) {
 		b = b[4*n:]
 	}
 
-	return p, nil
+	return p
 }
 
 // A NextHop is the NEXT_HOP attribute: the IPv4 address of the router to be

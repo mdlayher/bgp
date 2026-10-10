@@ -19,10 +19,6 @@ const (
 	// default.
 	defaultHoldTime = 90 * time.Second
 
-	// minHoldTime is the smallest nonzero hold time RFC 4271, section 6.2
-	// permits a speaker to accept.
-	minHoldTime = 3 * time.Second
-
 	// connectRetryTime is the base interval between dial attempts, jittered
 	// per RFC 4271, section 10. Its timer is armed when a dial begins, so
 	// it bounds an in-flight dial as well as the pause after a failed one:

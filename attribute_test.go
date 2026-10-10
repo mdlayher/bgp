@@ -964,6 +964,38 @@ func TestRawAttributeParseErrors(t *testing.T) {
 			subcode: SubcodeOptionalAttributeError,
 		},
 		{
+			name: "MP unreach BGP-LS record header truncated",
+			a: RawAttribute{
+				Type: AttrMPUnreachNLRI,
+				Data: []byte{0x40, 0x04, 0x47, 0, 1, 0},
+			},
+			subcode: SubcodeOptionalAttributeError,
+		},
+		{
+			name: "MP unreach BGP-LS trailing record header truncated",
+			a: RawAttribute{
+				Type: AttrMPUnreachNLRI,
+				Data: []byte{0x40, 0x04, 0x47, 0, 1, 0, 1, 0xff, 0, 2},
+			},
+			subcode: SubcodeOptionalAttributeError,
+		},
+		{
+			name: "MP unreach EVPN record header truncated",
+			a: RawAttribute{
+				Type: AttrMPUnreachNLRI,
+				Data: []byte{0x00, 0x19, 0x46, 2},
+			},
+			subcode: SubcodeOptionalAttributeError,
+		},
+		{
+			name: "MP unreach EVPN trailing record header truncated",
+			a: RawAttribute{
+				Type: AttrMPUnreachNLRI,
+				Data: []byte{0x00, 0x19, 0x46, 2, 1, 0xff, 5},
+			},
+			subcode: SubcodeOptionalAttributeError,
+		},
+		{
 			name: "MP reach prefix truncated",
 			a: RawAttribute{
 				Type: AttrMPReachNLRI,

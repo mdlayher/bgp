@@ -32,8 +32,7 @@ type MPReachNLRI struct {
 	LinkLocal netip.Addr
 
 	// NLRI is the advertised reachability information, in the shape Family
-	// determines: Prefixes for a prefix shaped family, EVPNRoutes for L2VPN
-	// EVPN, RawNLRI for a family this package does not model.
+	// determines; see [NLRI].
 	NLRI NLRI
 }
 
