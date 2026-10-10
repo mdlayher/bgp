@@ -934,8 +934,9 @@ func (f *FSM) endSession(fc *fsmConn, cl Close) {
 
 	// The write deadline comes first: it bounds a writer blocked mid-write
 	// by an unresponsive peer, and then bounds the NOTIFICATION write below
-	// under the same absolute budget.
-	_ = fc.c.SetWriteDeadline(time.Now().Add(teardownTimeout))
+	// under the same absolute budget. stop also refuses later writes, so
+	// nothing extends it.
+	fc.writer.stop(fc.c, time.Now().Add(teardownTimeout))
 	fc.cancelSess()
 	close(fc.fsmDone)
 	<-fc.writer.exited

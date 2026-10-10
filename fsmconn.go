@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -371,6 +372,36 @@ type sessionWriter struct {
 	sendC      chan sendReq
 	keepaliveC chan struct{}
 	exited     chan struct{}
+
+	// stopped is set by stop and refuses later writes; see arm.
+	mu      sync.Mutex
+	stopped bool
+}
+
+// arm sets c's write deadline d from now for one write, or reports false
+// once stop has run. The check and the set are one critical section, so an
+// arm either precedes stop, whose later deadline then wins, or is refused.
+// Setting the deadline is the work the lock serializes.
+func (w *sessionWriter) arm(c *Conn, d time.Duration) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.stopped {
+		return false
+	}
+
+	_ = c.SetWriteDeadline(time.Now().Add(d))
+	return true
+}
+
+// stop refuses later writes and sets c's write deadline to t, bounding any
+// write in flight.
+func (w *sessionWriter) stop(c *Conn, t time.Time) {
+	w.mu.Lock()
+	w.stopped = true
+	w.mu.Unlock()
+
+	_ = c.SetWriteDeadline(t)
 }
 
 // writeSession is an established session's writer goroutine: it
@@ -384,40 +415,43 @@ type sessionWriter struct {
 // wedge the writer forever while feeding this speaker's hold timer, leaving
 // the session's liveness to the peer's own hold timer alone. The expired
 // write is terminal like any other write failure, and sessionClose reports
-// it as Send Hold Timer Expired.
+// it as Send Hold Timer Expired. Once endSession stops the writer, a write
+// is refused with [ErrNotEstablished] and the writer exits.
 func (f *FSM) writeSession(fc *fsmConn) {
 	defer close(fc.writer.exited)
 
 	write := func(m Message) error {
-		_ = fc.c.SetWriteDeadline(time.Now().Add(cmp.Or(f.cfg.SendHoldTime, 2*fc.sess.HoldTime)))
+		if !fc.writer.arm(fc.c, cmp.Or(f.cfg.SendHoldTime, 2*fc.sess.HoldTime)) {
+			return ErrNotEstablished
+		}
+
 		return fc.c.WriteMessage(m)
 	}
 
 	for {
+		var err error
 		select {
 		case req := <-fc.writer.sendC:
-			err := write(req.m)
+			err = write(req.m)
 			req.doneC <- err
-			if err != nil && !isMarshalError(err) {
-				f.forward(fc, connEvent{
-					fc:    fc,
-					err:   err,
-					local: true,
-				})
-
-				return
-			}
 		case <-fc.writer.keepaliveC:
-			if err := write(&Keepalive{}); err != nil {
-				f.forward(fc, connEvent{
-					fc:    fc,
-					err:   err,
-					local: true,
-				})
-
-				return
-			}
+			err = write(&Keepalive{})
 		case <-fc.fsmDone:
+			return
+		}
+
+		switch {
+		case err == nil, isMarshalError(err):
+		case errors.Is(err, ErrNotEstablished):
+			// Refused by teardown: nothing to report.
+			return
+		default:
+			f.forward(fc, connEvent{
+				fc:    fc,
+				err:   err,
+				local: true,
+			})
+
 			return
 		}
 	}

@@ -917,9 +917,10 @@ func (f *FSM) send(ctx context.Context, fc *fsmConn, m Message) error {
 	}
 
 	// The writer accepted the message: the send is committed, and the
-	// writer always answers, even when the session dies mid-write.
+	// writer always answers, even when the session dies mid-write or
+	// teardown refuses the write.
 	err := <-doneC
-	if err != nil && !isMarshalError(err) {
+	if err != nil && !isMarshalError(err) && !errors.Is(err, ErrNotEstablished) {
 		// A connection write failure ends the session, since the writer
 		// has already forwarded it to the FSM, so wrap [ErrNotEstablished]:
 		// errors.Is then separates a dying session, which a route pusher

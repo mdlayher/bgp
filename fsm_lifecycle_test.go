@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -736,6 +737,69 @@ func TestFSMStuckReaderAbandoned(t *testing.T) {
 	})
 }
 
+// TestFSMTeardownBoundedAgainstStalledPeer pins endSession's bound against
+// a peer which stopped reading: a send reaching the writer after teardown
+// set its deadline cannot extend it. The transport parks teardown inside
+// that SetWriteDeadline, before fsmDone closes, so the send is the writer's
+// only ready case and the test is deterministic.
+func TestFSMTeardownBoundedAgainstStalledPeer(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		scripts := make(chan *script, 1)
+		conns := make(chan *stalledConn, 1)
+		r := newFSMRig(t, FSMConfig{DialFunc: func(context.Context) (*Conn, error) {
+			client, server := memPipe()
+			scripts <- newScript(t, server)
+			c := &stalledConn{
+				memConn:  client,
+				teardown: make(chan struct{}, 1),
+				resume:   make(chan struct{}),
+			}
+
+			conns <- c
+			return NewConn(c), nil
+		}})
+
+		recv(t, scripts, "the FSM to dial").establish(scriptOpen())
+		c := recv(t, conns, "the dialed transport")
+		recv(t, r.estC, "session establishment")
+
+		fc := r.f.established.Load()
+		c.stall()
+
+		var wg sync.WaitGroup
+		elapsed := make(chan time.Duration, 1)
+		wg.Go(func() {
+			start := time.Now()
+			if err := r.f.ResetSession(t.Context(), nil); err != nil {
+				t.Errorf("failed to reset session: %v", err)
+			}
+
+			elapsed <- time.Since(start)
+		})
+
+		// A caller which loaded the session before teardown reaches the
+		// writer now.
+		recv(t, c.teardown, "the teardown's write deadline")
+		err := r.f.send(t.Context(), fc, &Keepalive{})
+		close(c.resume)
+
+		if !errors.Is(err, ErrNotEstablished) {
+			t.Errorf("expected ErrNotEstablished, got: %v", err)
+		}
+
+		if d := <-elapsed; d > 2*teardownTimeout {
+			t.Errorf("teardown took %s, beyond its bound of %s", d, 2*teardownTimeout)
+		}
+
+		wg.Wait()
+		if err := r.wait(); err != nil {
+			t.Fatalf("unexpected Connect error: %v", err)
+		}
+	})
+}
+
 // An fsmRig runs one FSM under test inside a synctest bubble, over
 // in-memory pipes: each dial's scripted side arrives on dials, and deliver
 // hands in an accepted connection. Connect runs on its own goroutine from
@@ -879,4 +943,53 @@ type stuckReadConn struct {
 func (c *stuckReadConn) Read([]byte) (int, error) {
 	<-c.release
 	return 0, io.EOF
+}
+
+// A stalledConn is a transport whose peer stops reading once stalled: a
+// Write then blocks until its deadline or Close. A stalled SetWriteDeadline
+// of teardownTimeout from now signals teardown and blocks until resume.
+type stalledConn struct {
+	*memConn
+	teardown, resume chan struct{}
+
+	mu       sync.Mutex
+	stalled  bool
+	deadline time.Time
+}
+
+func (c *stalledConn) stall() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stalled = true
+}
+
+func (c *stalledConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	stalled, d := c.stalled, c.deadline
+	c.mu.Unlock()
+
+	if !stalled {
+		return c.memConn.Write(p)
+	}
+
+	select {
+	case <-time.After(time.Until(d)):
+		return 0, os.ErrDeadlineExceeded
+	case <-c.done:
+		return 0, net.ErrClosed
+	}
+}
+
+func (c *stalledConn) SetWriteDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.deadline = t
+	teardown := c.stalled && t.Equal(time.Now().Add(teardownTimeout))
+	c.mu.Unlock()
+
+	if teardown {
+		c.teardown <- struct{}{}
+		<-c.resume
+	}
+
+	return nil
 }
