@@ -497,6 +497,24 @@ func TestRawAttributeParseRoundTrip(t *testing.T) {
 			},
 		},
 		{
+			// An absent next hop parses for an unmodeled family too.
+			name: "MP reach unmodeled family absent next hop",
+			attr: MPReachNLRI{
+				Family: nsap(),
+				NLRI:   RawNLRI{0xff, 0xfe},
+			},
+			raw: RawAttribute{
+				Flags: AttrFlagOptional,
+				Type:  AttrMPReachNLRI,
+				Data: []byte{
+					0x00, 0x03, 0x01,
+					0,
+					0x00,
+					0xff, 0xfe,
+				},
+			},
+		},
+		{
 			// L2VPN VPLS is deliberately unmodeled (RFC 4761), so its NLRI
 			// is carried verbatim: an unmodeled family survives parse and
 			// re-marshal byte for byte rather than failing.
@@ -1083,6 +1101,20 @@ func TestRawAttributeParseUnknownType(t *testing.T) {
 
 	if _, ok := errors.AsType[*MessageError](err); !ok {
 		t.Fatalf("expected a MessageError, but got: %v", err)
+	}
+}
+
+func TestRawAttributeParseUnsupportedNextHop(t *testing.T) {
+	t.Parallel()
+
+	// The attribute is well formed, so the error is not a MessageError.
+	_, err := unsupportedNextHopAttr().Parse()
+	if !errors.Is(err, ErrUnsupportedNextHop) {
+		t.Fatalf("expected ErrUnsupportedNextHop, but got: %v", err)
+	}
+
+	if merr, ok := errors.AsType[*MessageError](err); ok {
+		t.Fatalf("expected a plain error, but got: %v", merr)
 	}
 }
 
@@ -1718,6 +1750,21 @@ func TestRawAttributesParse(t *testing.T) {
 		}
 	})
 
+	t.Run("unsupported next hop", func(t *testing.T) {
+		t.Parallel()
+
+		// The MP_REACH_NLRI stays raw, and the rest still parse.
+		got, err := append(raw.Clone(), unsupportedNextHopAttr()).Parse()
+		if err != nil {
+			t.Fatalf("failed to parse attributes: %v", err)
+		}
+
+		want := append(append([]Attribute{}, typed...), unknown, unsupportedNextHopAttr())
+		if d := diff(t, want, got); d != "" {
+			t.Fatalf("unexpected attributes (-want +got):\n%s", d)
+		}
+	})
+
 	t.Run("nil", func(t *testing.T) {
 		t.Parallel()
 
@@ -1801,6 +1848,15 @@ func TestLookup(t *testing.T) {
 		}
 	})
 
+	t.Run("unsupported next hop", func(t *testing.T) {
+		t.Parallel()
+
+		_, _, err := Lookup[MPReachNLRI](append(raw.Clone(), unsupportedNextHopAttr()))
+		if !errors.Is(err, ErrUnsupportedNextHop) {
+			t.Fatalf("expected ErrUnsupportedNextHop, but got: %v", err)
+		}
+	})
+
 	t.Run("interface", func(t *testing.T) {
 		t.Parallel()
 
@@ -1839,4 +1895,20 @@ func mustAttributes(tb testing.TB, attrs ...Attribute) []RawAttribute {
 	}
 
 	return ras
+}
+
+// unsupportedNextHopAttr is an NSAP MP_REACH_NLRI with a 12 byte next hop,
+// which validates but does not decode.
+func unsupportedNextHopAttr() RawAttribute {
+	return RawAttribute{
+		Flags: AttrFlagOptional,
+		Type:  AttrMPReachNLRI,
+		Data: []byte{
+			0x00, 0x03, 0x01,
+			12,
+			0, 0, 0, 0, 0, 0, 0, 0, 192, 0, 2, 1,
+			0x00,
+			0xff, 0xfe,
+		},
+	}
 }

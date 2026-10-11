@@ -263,7 +263,7 @@ func validateNextHop(f Family, nh []byte) *MessageError {
 		return nil
 	case f.rdNextHop():
 		return validateRDNextHop(f, nh)
-	case (f.prefixShaped() || f.linkState()) && n != 4 && n != 16 && n != 32:
+	case (f.prefixShaped() || f.linkState() || f == familyEVPN) && n != 4 && n != 16 && n != 32:
 		return unsupportedNextHop(f, n)
 	default:
 		return nil

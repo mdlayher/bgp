@@ -54,6 +54,12 @@ const (
 // rather than treat it as malformed.
 var ErrUnknownAttribute = errors.New("bgp: cannot parse attribute of unknown type")
 
+// ErrUnsupportedNextHop is the error RawAttribute.Parse wraps for an
+// MP_REACH_NLRI of an unmodeled family whose next hop it cannot decode. It
+// is not a *MessageError: the attribute is well formed, and a caller reads
+// its next hop and NLRI raw.
+var ErrUnsupportedNextHop = errors.New("bgp: unsupported next hop for an unmodeled address family")
+
 // A RawAttribute is a BGP path attribute in raw binary form, as carried in an
 // Update. Parse decodes a RawAttribute into one of this package's Attribute
 // types, at the cost of additional allocations; callers which do not inspect
@@ -91,6 +97,9 @@ type RawAttribute struct {
 // and RFC 4271 requires unrecognized optional transitive attributes be passed
 // along unmodified. A caller which must distinguish the two tests the error
 // with errors.Is, and the RawAttribute itself remains usable in raw form.
+// Likewise, an undecodable next hop of an unmodeled family produces
+// [ErrUnsupportedNextHop]; a caller reads that attribute's next hop and
+// NLRI raw from Data.
 func (a RawAttribute) Parse() (Attribute, error) {
 	attr, err := a.parse()
 	if merr, ok := errors.AsType[*MessageError](err); ok {
@@ -267,12 +276,12 @@ func (as RawAttributes) Find(t AttrType) (RawAttribute, bool) {
 // section 5 requires of unrecognized optional transitive attributes.
 //
 // A malformed attribute of a known type fails the whole parse with its
-// *MessageError; see [RawAttribute.Parse]. The [ErrUnknownAttribute] error
-// the single-attribute Parse returns is absorbed here: it is the signal to
-// keep the attribute raw, not a failure. Typed values never reference the
-// raw list's Data, but a RawAttribute returned as-is does, so a caller
-// retaining the result past the lifetime of the buffer the list references
-// clones the list first.
+// *MessageError; see [RawAttribute.Parse]. The [ErrUnknownAttribute] and
+// [ErrUnsupportedNextHop] errors the single-attribute Parse returns are
+// absorbed here: each is the signal to keep the attribute raw, not a failure.
+// Typed values never reference the raw list's Data, but a RawAttribute
+// returned as-is does, so a caller retaining the result past the lifetime of
+// the buffer the list references clones the list first.
 func (as RawAttributes) Parse() ([]Attribute, error) {
 	if as == nil {
 		return nil, nil
@@ -282,7 +291,7 @@ func (as RawAttributes) Parse() ([]Attribute, error) {
 	for _, a := range as {
 		attr, err := a.Parse()
 		switch {
-		case errors.Is(err, ErrUnknownAttribute):
+		case errors.Is(err, ErrUnknownAttribute), errors.Is(err, ErrUnsupportedNextHop):
 			attr = a
 		case err != nil:
 			return nil, err
@@ -313,7 +322,8 @@ func (as RawAttributes) markAddPath(fs []Family) {
 // Lookup finds the first attribute of as whose type is T's and parses it,
 // reporting false when as carries none: the typed accessor for one attribute
 // of an Update, as in Lookup[ASPath](u.Attributes). A malformed attribute
-// produces the *MessageError of RawAttribute.Parse.
+// produces the *MessageError of RawAttribute.Parse. On
+// [ErrUnsupportedNextHop], read the attribute raw with RawAttributes.Find.
 //
 // T must be one of the typed Attribute implementations, which each know
 // their own wire type. The Attribute interface itself is rejected with an

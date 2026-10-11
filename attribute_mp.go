@@ -103,7 +103,7 @@ func parseMPReachNLRI(b []byte, addPath bool) (MPReachNLRI, error) {
 	// and the fixed point holds; see Family.rdNextHop. A length of zero is
 	// an absent next hop for any family, such as RFC 8955 sends. A family
 	// this package does not model passes validation with any length, and
-	// one this switch cannot decode is unsupported rather than malformed.
+	// one this switch cannot decode is ErrUnsupportedNextHop, not malformed.
 	n := int(b[3])
 	nh := b[4 : 4+n]
 	switch rd := m.Family.rdNextHop(); {
@@ -123,8 +123,8 @@ func parseMPReachNLRI(b []byte, addPath bool) (MPReachNLRI, error) {
 		m.NextHop = netip.AddrFrom16([16]byte(nh[8:24]))
 		m.LinkLocal = netip.AddrFrom16([16]byte(nh[32:48]))
 	default:
-		return MPReachNLRI{}, updateError(SubcodeOptionalAttributeError, nil,
-			"unsupported %s next hop length %d", m.Family, n)
+		return MPReachNLRI{}, fmt.Errorf("%w: %s, length %d",
+			ErrUnsupportedNextHop, m.Family, n)
 	}
 
 	// One reserved byte, then NLRI.

@@ -125,6 +125,15 @@ func TestParseUpdateErrors(t *testing.T) {
 			data:    mpReachBytes(v4VPN(), []byte{0, 0, 0, 1, 0, 0, 0, 0, 192, 0, 2, 1}, nil),
 		},
 		{
+			// RFC 7432, section 7: an EVPN next hop is an IP address, so
+			// a 12 byte one is malformed, as for any modeled family.
+			name:    "MP_REACH_NLRI EVPN next hop length",
+			b:       updateBody(mpReachBytes(familyEVPN, make([]byte, 12), nil), nil),
+			code:    NotificationUpdateMessageError,
+			subcode: SubcodeOptionalAttributeError,
+			data:    mpReachBytes(familyEVPN, make([]byte, 12), nil),
+		},
+		{
 			name:    "MP_UNREACH_NLRI prefix truncated",
 			b:       updateBody(attrBytes(AttrFlagOptional, AttrMPUnreachNLRI, 0x00, 0x02, 0x01, 64, 0x20, 0x01, 0x0d), nil),
 			code:    NotificationUpdateMessageError,
